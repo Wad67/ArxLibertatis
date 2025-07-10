@@ -16,29 +16,13 @@
 # along with Arx Libertatis. If not, see <http://www.gnu.org/licenses/>.
 
 import bpy
-
-from bpy.props import (
-    IntProperty,
-    BoolProperty,
-    StringProperty,
-    CollectionProperty,
-    PointerProperty
-)
-
-from bpy.types import (
-    Operator,
-    Panel,
-    PropertyGroup,
-    UIList
-)
-
-from .arx_io_util import (
-    ArxException
-)
-
+import os
+from bpy.props import IntProperty, BoolProperty, StringProperty, CollectionProperty, PointerProperty, EnumProperty
+from bpy.types import Operator, Panel, PropertyGroup, UIList
+from mathutils import Matrix, Vector, Quaternion
+from .arx_io_util import ArxException, arx_pos_to_blender_for_model
 from .managers import getAddon
 
-# TODO this should be configurable
 g_areaToLevel = {
     0:0, 8:0, 11:0, 12:0,
     1:1, 13:1, 14:1,
@@ -51,19 +35,16 @@ g_areaToLevel = {
 }
 
 def importArea(context, report, area_id):
-    scene_name = "Area_" + str(area_id).zfill(2)
+    scene_name = f"Area_{area_id:02d}"
     scene = bpy.data.scenes.get(scene_name)
     if scene:
-        report({'INFO'}, "Area Scene named [{}] already exists.".format(scene_name))
+        report({'INFO'}, f"Area Scene named [{scene_name}] already exists.")
         return
-    
-    report({'INFO'}, "Creating new Area Scene [{}]".format(scene_name))
+    report({'INFO'}, f"Creating new Area Scene [{scene_name}]")
     scene = bpy.data.scenes.new(name=scene_name)
     scene.unit_settings.system = 'METRIC'
     scene.unit_settings.scale_length = 0.01
-    
     getAddon(context).sceneManager.importScene(context, scene, area_id)
-
 
 class CUSTOM_OT_arx_area_list_reload(Operator):
     bl_idname = "arx.arx_area_list_reload"
@@ -71,23 +52,16 @@ class CUSTOM_OT_arx_area_list_reload(Operator):
     def invoke(self, context, event):
         area_list = context.window_manager.arx_areas_col
         area_list.clear()
-        for area_id, value in getAddon(context).arxFiles.levels.levels.items():
+        for area_id, value in getAddon(context).arxFiles.levels.items():
             item = area_list.add()
-            item.name = 'Area {}'.format(area_id)
+            item.name = f'Area {area_id}'
             item.area_id = area_id
             item.level_id = g_areaToLevel.get(area_id, -1)
         return {"FINISHED"}
 
 class ARX_area_properties(PropertyGroup):
-    area_id: IntProperty(
-        name="Arx Area ID",
-        min=0
-    )
-    level_id: IntProperty(
-        name="Arx Level ID",
-        description="Levels are consist of areas",
-        min=-1
-    )
+    area_id: IntProperty(name="Arx Area ID", min=0)
+    level_id: IntProperty(name="Arx Level ID", description="Levels consist of areas", min=-1)
 
 class SCENE_UL_arx_area_list(UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
@@ -95,7 +69,6 @@ class SCENE_UL_arx_area_list(UIList):
         split.label(text=item.name)
         split.label(text=str(item.area_id))
         split.label(text=str(item.level_id))
-
     def invoke(self, context, event):
         pass
 
@@ -112,12 +85,11 @@ class CUSTOM_OT_arx_area_list_import_selected(Operator):
             return {'CANCELLED'}
         return {'FINISHED'}
 
-class ArxOperatorImportAllLevels(bpy.types.Operator):
+class ArxOperatorImportAllLevels(Operator):
     bl_idname = "arx.operator_import_all_levels"
-    bl_label = "Import all levels"
-
+    bl_label = "Import All Levels"
     def execute(self, context):
-        for area_id, value in getAddon(context).arxFiles.levels.levels.items():
+        for area_id, value in getAddon(context).arxFiles.levels.items():
             try:
                 importArea(context, self.report, area_id)
             except ArxException as e:
@@ -125,27 +97,310 @@ class ArxOperatorImportAllLevels(bpy.types.Operator):
                 return {'CANCELLED'}
         return {'FINISHED'}
 
-class ArxAreaPanel(Panel):
-    bl_idname = "SCENE_PT_arx_areas"
-    bl_label = "Arx Areas"
+class ArxAnimationTestProperties(PropertyGroup):
+    model: StringProperty(name="Model", description="Selected NPC model")
+    animation: StringProperty(name="Animation", description="Selected animation")
+    flip_w: BoolProperty(name="Flip W", default=True, description="Flip quaternion W component")
+    flip_x: BoolProperty(name="Flip X", default=False, description="Flip quaternion X component")
+    flip_y: BoolProperty(name="Flip Y", default=True, description="Flip quaternion Y component")
+    flip_z: BoolProperty(name="Flip Z", default=False, description="Flip quaternion Z component")
+    axis_mapping: EnumProperty(
+        name="Axis Mapping",
+        items=[
+            ('XYZ', "X→X, Y→Y, Z→Z", "No remapping"),
+            ('XZY', "X→X, Y→Z, Z→-Y", "Map Y to Z, Z to -Y"),
+            ('YZX', "X→-Z, Y→Y, Z→X", "Map X to -Z, Z to X"),
+            ('ZXY', "X→Y, Y→Z, Z→X", "Map X to Y, Y to Z, Z to X"),
+            ('ZYX', "X→Z, Y→Y, Z→X", "Map X to Z, Z to X"),
+            ('YXZ', "X→Y, Y→X, Z→Z", "Map X to Y, Y to X")
+        ],
+        default='ZXY',
+        description="Axis remapping for quaternions"
+    )
+
+class ArxModelListProperties(PropertyGroup):
+    model_list: CollectionProperty(type=bpy.types.PropertyGroup)
+    model_list_loaded: BoolProperty(default=False)
+
+class ArxModelListItem(PropertyGroup):
+    name: StringProperty()
+
+class ArxOperatorRefreshModelList(Operator):
+    bl_idname = "arx.refresh_model_list"
+    bl_label = "Refresh Model List"
+    
+    def execute(self, context):
+        addon = getAddon(context)
+        arx_files = addon.arxFiles
+        
+        # Update ArxFiles data
+        arx_files.updateAll()
+        
+        # Clear existing model list
+        context.scene.arx_model_list_props.model_list.clear()
+        
+        # Populate model list
+        for key in arx_files.models.data.keys():
+            if key[0] == "npc":
+                item = context.scene.arx_model_list_props.model_list.add()
+                item.name = key[-1]
+        
+        context.scene.arx_model_list_props.model_list_loaded = True
+        
+        print(f"Arx directory: {arx_files.rootPath}")
+        print(f"Models: {list(arx_files.models.data.keys())}")
+        print(f"Animations: {list(arx_files.animations.data.keys())}")
+        
+        if not context.scene.arx_model_list_props.model_list:
+            self.report({'WARNING'}, "No NPC models found")
+        else:
+            self.report({'INFO'}, f"Found {len(context.scene.arx_model_list_props.model_list)} NPC models")
+        
+        return {'FINISHED'}
+
+class ArxOperatorTestGoblinAnimations(Operator):
+    bl_idname = "arx.test_goblin_animations"
+    bl_label = "Test Selected Animation"
+    bl_options = {'REGISTER'}
+
+    def invoke(self, context, event):
+        return context.window_manager.invoke_confirm(self, event)
+
+    def execute(self, context):
+        addon = getAddon(context)
+        arx_files = getAddon(context).arxFiles
+        # Ensure ArxFiles is updated
+        if not arx_files.models.data or not arx_files.animations.data:
+            arx_files.updateAll()
+            print(f"Models: {list(arx_files.models.data.keys())}")
+            print(f"Animations: {list(arx_files.animations.data.keys())}")
+        # Clear existing objects
+        bpy.ops.object.select_all(action='SELECT')
+        bpy.ops.object.delete(use_global=False)
+        for action in bpy.data.actions:
+            bpy.data.actions.remove(action)
+        for collection in bpy.data.collections:
+            bpy.data.collections.remove(collection)
+        for mesh in bpy.data.meshes:
+            bpy.data.meshes.remove(mesh)
+        for armature in bpy.data.armatures:
+            bpy.data.armatures.remove(armature)
+        # Get selected model
+        props = context.scene.arx_animation_test
+        model_name = props.model
+        if not model_name:
+            self.report({'ERROR'}, "No model selected")
+            return {'CANCELLED'}
+        model_key = tuple(["npc", model_name])
+        if model_key not in arx_files.models.data:
+            self.report({'ERROR'}, f"Model {model_name} not found in ArxFiles")
+            return {'CANCELLED'}
+        model_data = arx_files.models.data[model_key]
+        model_path = os.path.join(model_data.path, model_data.model)
+        # Import model
+        obj = None
+        try:
+            addon.objectManager.loadFile(context, model_path, context.scene, import_tweaks=False)
+        except ArxException as e:
+            self.report({'ERROR'}, f"Failed to import model {model_name}: {str(e)}")
+            return {'CANCELLED'}
+        # Find mesh
+        for o in bpy.data.objects:
+            if o.name.startswith(f"npc/{model_name}") and o.type == 'MESH':
+                obj = o
+                break
+        if not obj:
+            self.report({'ERROR'}, f"Model mesh {model_name} not found")
+            return {'CANCELLED'}
+        # Find armature
+        armature_obj = None
+        for o in bpy.data.objects:
+            if o.name.startswith(f"npc/{model_name}") and o.type == 'ARMATURE':
+                armature_obj = o
+                break
+        if not armature_obj:
+            for modifier in obj.modifiers:
+                if modifier.type == 'ARMATURE' and modifier.object:
+                    armature_obj = modifier.object
+                    break
+        if not armature_obj:
+            self.report({'ERROR'}, f"No armature found for mesh '{obj.name}'")
+            return {'CANCELLED'}
+        # Validate animation
+        anim_name = props.animation
+        if not anim_name:
+            self.report({'ERROR'}, "No animation selected")
+            return {'CANCELLED'}
+        anim_key = anim_name
+        if anim_key not in arx_files.animations.data:
+            self.report({'ERROR'}, f"Animation {anim_key} not found in ArxFiles")
+            return {'CANCELLED'}
+        anim_path = arx_files.animations.data[anim_key]
+        # Set up animation import
+        frame_rate = context.scene.render.fps
+        axis_mapping = {
+            'XYZ': Matrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]),
+            'XZY': Matrix([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]]),
+            'YZX': Matrix([[0, 0, -1, 0], [0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1]]),
+            'ZXY': Matrix([[0, 1, 0, 0], [0, 0, 1, 0], [1, 0, 0, 0], [0, 0, 0, 1]]),
+            'ZYX': Matrix([[0, 0, 1, 0], [0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1]]),
+            'YXZ': Matrix([[0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
+        }[props.axis_mapping]
+        def arx_transform_to_blender(location, rotation, scale, scale_factor=0.1):
+            loc = arx_pos_to_blender_for_model(location) * scale_factor
+            rot = Quaternion((rotation.w, rotation.x, rotation.y, rotation.z))
+            rot = (axis_mapping @ rot.to_matrix().to_4x4() @ axis_mapping.inverted()).to_quaternion()
+            if props.flip_w:
+                rot.w = -rot.w
+            if props.flip_x:
+                rot.x = -rot.x
+            if props.flip_y:
+                rot.y = -rot.y
+            if props.flip_z:
+                rot.z = -rot.z
+            rot.normalize()
+            scl = Vector((1.0, 1.0, 1.0)) if scale.length == 0 else Vector((scale.x, scale.z, scale.y))
+            return loc, rot, scl
+        # Import animation
+        bpy.context.view_layer.objects.active = obj
+        obj.select_set(True)
+        try:
+            action = addon.animationManager.loadAnimation(anim_path, f"g{model_name}_{anim_name}", frame_rate=frame_rate, axis_transform=arx_transform_to_blender)
+            if action is None:
+                self.report({'ERROR'}, f"Failed to apply animation {anim_key}: possible group count mismatch (check log)")
+                return {'CANCELLED'}
+            self.report({'INFO'}, f"Imported animation: {anim_name}")
+        except ArxException as e:
+            self.report({'ERROR'}, f"Failed to import {anim_key}: {str(e)}")
+            return {'CANCELLED'}
+        return {'FINISHED'}
+
+class ArxAnimationTestPanel(Panel):
+    bl_idname = "SCENE_PT_arx_animation_test"
+    bl_label = "Arx Animation Test"
     bl_space_type = 'PROPERTIES'
     bl_region_type = 'WINDOW'
     bl_context = "scene"
 
     def draw(self, context):
         layout = self.layout
-        layout.operator("arx.arx_area_list_reload")
-        layout.template_list(
-            listtype_name="SCENE_UL_arx_area_list",
-            list_id="",
-            dataptr=context.window_manager,
-            propname="arx_areas_col",
-            active_dataptr=context.window_manager,
-            active_propname="arx_areas_idx"
-        )
-        layout.operator("arx.area_list_import_selected")
-        layout.operator("arx.operator_import_all_levels")
+        props = context.scene.arx_animation_test
+        addon = getAddon(context)
+        arx_files = addon.arxFiles
+        
+        # Check if model list is loaded
+        if not context.scene.arx_model_list_props.model_list_loaded:
+            layout.operator("arx.refresh_model_list", text="Load Models")
+            return
+        
+        # Show refresh button
+        layout.operator("arx.refresh_model_list", text="Refresh Models")
+        
+        # Check if models are available
+        if not context.scene.arx_model_list_props.model_list:
+            layout.label(text="WARNING: No NPC models found", icon='ERROR')
+            return
+        
+        # Model selection
+        row = layout.row()
+        row.label(text="Model:")
+        row.operator("arx.select_model", text=props.model if props.model else "Select Model")
+        
+        # Animation selection
+        if props.model:
+            # Get available animations for the selected model
+            # Look for animations that contain the model name anywhere in the filename
+            anim_list = [
+                anim for anim in sorted(arx_files.animations.data.keys())
+                if props.model.lower() in anim.lower()
+            ]
+            row = layout.row()
+            row.label(text="Animation:")
+            row.operator("arx.select_animation", text=props.animation if props.animation else "Select Animation")
+            if not anim_list:
+                layout.label(text="WARNING: No animations found for selected model", icon='ERROR')
+        
+        # Animation settings
+        layout.prop(props, "axis_mapping", text="Axis Mapping")
+        layout.prop(props, "flip_w", text="Flip W")
+        layout.prop(props, "flip_x", text="Flip X")
+        layout.prop(props, "flip_y", text="Flip Y")
+        layout.prop(props, "flip_z", text="Flip Z")
+        
+        # Test button
+        layout.operator("arx.test_goblin_animations", text="Test Selected Animation")
 
+class ArxSelectModelOperator(Operator):
+    bl_idname = "arx.select_model"
+    bl_label = "Select Model"
+    model: StringProperty()
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_props_dialog(self, width=200)
+        return {'RUNNING_MODAL'}
+
+    def draw(self, context):
+        layout = self.layout
+        model_list = context.scene.arx_model_list_props.model_list
+        for item in model_list:
+            layout.operator("arx.set_model", text=item.name).model = item.name
+        if not model_list:
+            layout.label(text="No models available")
+
+    def execute(self, context):
+        return {'FINISHED'}
+
+class ArxSetModelOperator(Operator):
+    bl_idname = "arx.set_model"
+    bl_label = "Set Model"
+    model: StringProperty()
+
+    def execute(self, context):
+        props = context.scene.arx_animation_test
+        props.model = self.model
+        props.animation = ""  # Reset animation
+        return {'FINISHED'}
+
+class ArxSelectAnimationOperator(Operator):
+    bl_idname = "arx.select_animation"
+    bl_label = "Select Animation"
+    animation: StringProperty()
+
+    def invoke(self, context, event):
+        context.window_manager.invoke_props_dialog(self, width=200)
+        return {'RUNNING_MODAL'}
+
+    def draw(self, context):
+        layout = self.layout
+        props = context.scene.arx_animation_test
+        arx_files = getAddon(context).arxFiles
+        
+        # Find animations that contain the model name anywhere in the filename
+        matching_anims = []
+        for anim in sorted(arx_files.animations.data.keys()):
+            if props.model.lower() in anim.lower():
+                matching_anims.append(anim)
+        
+        for anim in matching_anims:
+            # Display the full animation name, removing .tea extension if present
+            display_name = anim.replace('.tea', '') if anim.endswith('.tea') else anim
+            layout.operator("arx.set_animation", text=display_name).animation = anim
+        
+        if not matching_anims:
+            layout.label(text="No animations available")
+
+    def execute(self, context):
+        return {'FINISHED'}
+
+class ArxSetAnimationOperator(Operator):
+    bl_idname = "arx.set_animation"
+    bl_label = "Set Animation"
+    animation: StringProperty()
+
+    def execute(self, context):
+        props = context.scene.arx_animation_test
+        props.animation = self.animation
+        return {'FINISHED'}
 
 classes = (
     CUSTOM_OT_arx_area_list_reload,
@@ -153,21 +408,32 @@ classes = (
     SCENE_UL_arx_area_list,
     CUSTOM_OT_arx_area_list_import_selected,
     ArxOperatorImportAllLevels,
-    ArxAreaPanel,
+    ArxAnimationTestProperties,
+    ArxModelListProperties,
+    ArxModelListItem,
+    ArxOperatorRefreshModelList,
+    ArxOperatorTestGoblinAnimations,
+    ArxAnimationTestPanel,
+    ArxSelectModelOperator,
+    ArxSetModelOperator,
+    ArxSelectAnimationOperator,
+    ArxSetAnimationOperator,
 )
 
 def arx_ui_area_register():
     from bpy.utils import register_class
     for cls in classes:
         register_class(cls)
-
     bpy.types.WindowManager.arx_areas_col = CollectionProperty(type=ARX_area_properties)
     bpy.types.WindowManager.arx_areas_idx = IntProperty()
+    bpy.types.Scene.arx_animation_test = PointerProperty(type=ArxAnimationTestProperties)
+    bpy.types.Scene.arx_model_list_props = PointerProperty(type=ArxModelListProperties)
 
 def arx_ui_area_unregister():
     from bpy.utils import unregister_class
     for cls in reversed(classes):
         unregister_class(cls)
-
     del bpy.types.WindowManager.arx_areas_col
     del bpy.types.WindowManager.arx_areas_idx
+    del bpy.types.Scene.arx_animation_test
+    del bpy.types.Scene.arx_model_list_props

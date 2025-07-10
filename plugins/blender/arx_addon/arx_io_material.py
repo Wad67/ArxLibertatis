@@ -138,8 +138,10 @@ def arx_get_material_node_group():
 
     group = bpy.data.node_groups.new(arx_material_node_group_name, 'ShaderNodeTree')
 
-    group.outputs.new('NodeSocketShader', 'Shader')
-    group.inputs.new('NodeSocketColor', 'Color')
+    # Blender 4.0+ uses interface instead of inputs/outputs
+    # Create input and output sockets first
+    group.interface.new_socket('Color', in_out='INPUT', socket_type='NodeSocketColor')
+    group.interface.new_socket('Shader', in_out='OUTPUT', socket_type='NodeSocketShader')
 
     n_out = group.nodes.new('NodeGroupOutput')
     n_out.name = 'n_out'
@@ -181,6 +183,7 @@ def arx_get_material_node_group():
     n_in.name = 'n_in'
     n_in.location = Vector((-1300.0, 0.0))
 
+    # Create links between nodes
     group.links.new(n_mix.outputs['Shader'], n_out.inputs['Shader'])
 
     group.links.new(n_math1.outputs['Value'], n_mix.inputs['Fac'])
