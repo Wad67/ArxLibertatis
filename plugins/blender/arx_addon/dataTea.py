@@ -23,12 +23,20 @@ from ctypes import (
     c_float
 )
 
-from .dataCommon import (
-    SavedVec3,
-    ArxQuat,
-    SerializationException,
-    UnexpectedValueException
-)
+try:
+    from .dataCommon import (
+        SavedVec3,
+        ArxQuat,
+        SerializationException,
+        UnexpectedValueException
+    )
+except ImportError:
+    from dataCommon import (
+        SavedVec3,
+        ArxQuat,
+        SerializationException,
+        UnexpectedValueException
+    )
 
 class THEA_HEADER(LittleEndianStructure):
     _pack_ = 1
@@ -195,4 +203,149 @@ class TeaSerializer(object):
             ))
 
         self.log.debug("File loaded with %d frames", len(results))
-        return results
+        
+        # Perform interpolation like the engine does
+        interpolated_results = self._interpolate_missing_transforms(results)
+        
+        return interpolated_results
+    
+    def _interpolate_missing_transforms(self, frames):
+        """
+        Interpolate missing translation and rotation data between keyframes,
+        following the same logic as the Arx engine (Animation.cpp lines 374-422).
+        """
+        if not frames:
+            return frames
+            
+        # Convert to mutable list for modification
+        interpolated_frames = []
+        for frame in frames:
+            # Create a copy with the same structure
+            interpolated_frames.append(TeaFrame(
+                duration=frame.duration,
+                flags=frame.flags,
+                translation=frame.translation,
+                rotation=frame.rotation,
+                groups=frame.groups,
+                sampleName=frame.sampleName
+            ))
+        
+        # Interpolate missing translations
+        self._interpolate_translations(interpolated_frames)
+        
+        # Interpolate missing rotations  
+        self._interpolate_rotations(interpolated_frames)
+        
+        return interpolated_frames
+    
+    def _interpolate_translations(self, frames):
+        """
+        Interpolate missing translation data between keyframes.
+        Based on Animation.cpp lines 374-395.
+        """
+        for i in range(len(frames)):
+            if frames[i].translation is None:
+                # Find previous frame with translation data
+                k = i - 1
+                while k >= 0 and frames[k].translation is None:
+                    k -= 1
+                
+                # Find next frame with translation data
+                j = i + 1
+                while j < len(frames) and frames[j].translation is None:
+                    j += 1
+                
+                if j < len(frames) and k >= 0:
+                    # Linear interpolation between keyframes
+                    r1 = self._get_time_between_keyframes(frames, k, i)
+                    r2 = self._get_time_between_keyframes(frames, i, j)
+                    
+                    if r1 + r2 > 0:
+                        tot = 1.0 / (r1 + r2)
+                        r1 *= tot
+                        r2 *= tot
+                        
+                        # Interpolate translation
+                        trans_k = frames[k].translation
+                        trans_j = frames[j].translation
+                        
+                        interpolated_translation = SavedVec3()
+                        interpolated_translation.x = trans_j.x * r1 + trans_k.x * r2
+                        interpolated_translation.y = trans_j.y * r1 + trans_k.y * r2
+                        interpolated_translation.z = trans_j.z * r1 + trans_k.z * r2
+                        
+                        # Update frame with interpolated translation
+                        frames[i] = TeaFrame(
+                            duration=frames[i].duration,
+                            flags=frames[i].flags,
+                            translation=interpolated_translation,
+                            rotation=frames[i].rotation,
+                            groups=frames[i].groups,
+                            sampleName=frames[i].sampleName
+                        )
+                        
+                        self.log.debug("Interpolated translation for frame %d: x=%.3f, y=%.3f, z=%.3f", 
+                                     i, interpolated_translation.x, interpolated_translation.y, interpolated_translation.z)
+    
+    def _interpolate_rotations(self, frames):
+        """
+        Interpolate missing rotation data between keyframes.
+        Based on Animation.cpp lines 397-422.
+        """
+        for i in range(len(frames)):
+            if frames[i].rotation is None:
+                # Find previous frame with rotation data
+                k = i - 1
+                while k >= 0 and frames[k].rotation is None:
+                    k -= 1
+                
+                # Find next frame with rotation data
+                j = i + 1
+                while j < len(frames) and frames[j].rotation is None:
+                    j += 1
+                
+                if j < len(frames) and k >= 0:
+                    # Linear interpolation between keyframes
+                    r1 = self._get_time_between_keyframes(frames, k, i)
+                    r2 = self._get_time_between_keyframes(frames, i, j)
+                    
+                    if r1 + r2 > 0:
+                        tot = 1.0 / (r1 + r2)
+                        r1 *= tot
+                        r2 *= tot
+                        
+                        # Interpolate rotation (quaternion)
+                        rot_k = frames[k].rotation
+                        rot_j = frames[j].rotation
+                        
+                        interpolated_rotation = ArxQuat()
+                        interpolated_rotation.w = rot_j.w * r1 + rot_k.w * r2
+                        interpolated_rotation.x = rot_j.x * r1 + rot_k.x * r2
+                        interpolated_rotation.y = rot_j.y * r1 + rot_k.y * r2
+                        interpolated_rotation.z = rot_j.z * r1 + rot_k.z * r2
+                        
+                        # Update frame with interpolated rotation
+                        frames[i] = TeaFrame(
+                            duration=frames[i].duration,
+                            flags=frames[i].flags,
+                            translation=frames[i].translation,
+                            rotation=interpolated_rotation,
+                            groups=frames[i].groups,
+                            sampleName=frames[i].sampleName
+                        )
+                        
+                        self.log.debug("Interpolated rotation for frame %d: w=%.3f, x=%.3f, y=%.3f, z=%.3f", 
+                                     i, interpolated_rotation.w, interpolated_rotation.x, interpolated_rotation.y, interpolated_rotation.z)
+    
+    def _get_time_between_keyframes(self, frames, start_idx, end_idx):
+        """
+        Calculate time between two keyframes based on frame durations.
+        """
+        if start_idx >= end_idx:
+            return 0.0
+            
+        total_time = 0.0
+        for i in range(start_idx, end_idx):
+            total_time += frames[i].duration
+            
+        return total_time

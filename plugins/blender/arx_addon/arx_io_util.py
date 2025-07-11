@@ -32,6 +32,7 @@ def arx_pos_to_blender_for_model(pos):
 def blender_pos_to_arx(pos):
     return (pos[0], -pos[2], pos[1])
 
+
 def arx_transform_to_blender(location, rotation, scale, scale_factor=0.1, flip_w=True, flip_x=False, flip_y=True, flip_z=False):
     # Transform location
     loc = arx_pos_to_blender_for_model(location) * scale_factor
