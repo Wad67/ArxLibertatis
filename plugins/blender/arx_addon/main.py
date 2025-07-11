@@ -64,6 +64,23 @@ class ArxModelsPanel(bpy.types.Panel):
         layout.operator("arx.operator_import_all_models")
         layout.operator("arx.operator_test_model_export")
 
+class ArxLevelsPanel(bpy.types.Panel):
+    bl_idname = "SCENE_PT_levels_panel"
+    bl_label = "Arx Libertatis Levels"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "scene"
+    def draw(self, context):
+        layout = self.layout
+        layout.operator("arx.operator_import_all_levels")
+        layout.operator("arx.arx_area_list_reload")
+        
+        # Show area list
+        area_list = context.window_manager.arx_areas_col
+        if area_list:
+            layout.template_list("SCENE_UL_arx_area_list", "", context.window_manager, "arx_areas_col", context.window_manager, "arx_areas_idx")
+            layout.operator("arx.area_list_import_selected")
+
 class ArxOperatorTestModelExport(bpy.types.Operator):
     bl_idname = "arx.operator_test_model_export"
     bl_label = "Test model export"
@@ -152,6 +169,7 @@ classes = (
     ArxOperatorImportAllModels,
     ArxOperatorTestModelExport,
     ArxModelsPanel,
+    ArxLevelsPanel,
     ArxMeshAddCustomProperties,
     ArxFacePanel,
     ImportFTL,

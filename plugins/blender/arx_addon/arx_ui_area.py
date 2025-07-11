@@ -53,7 +53,7 @@ class CUSTOM_OT_arx_area_list_reload(Operator):
     def invoke(self, context, event):
         area_list = context.window_manager.arx_areas_col
         area_list.clear()
-        for area_id, value in getAddon(context).arxFiles.levels.items():
+        for area_id, value in getAddon(context).arxFiles.levels.levels.items():
             item = area_list.add()
             item.name = f'Area {area_id}'
             item.area_id = area_id
@@ -90,7 +90,7 @@ class ArxOperatorImportAllLevels(Operator):
     bl_idname = "arx.operator_import_all_levels"
     bl_label = "Import All Levels"
     def execute(self, context):
-        for area_id, value in getAddon(context).arxFiles.levels.items():
+        for area_id, value in getAddon(context).arxFiles.levels.levels.items():
             try:
                 importArea(context, self.report, area_id)
             except ArxException as e:

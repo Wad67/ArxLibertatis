@@ -295,3 +295,215 @@ class ArxObjectManager(object):
                     tweak_obj = self.createObject(context, tweak_mesh, tweak_data, tweak_obj_id, parent_collection)
                     tweak_obj.parent = obj
         return obj
+
+    def toFtlData(self, obj) -> FtlData:
+
+        #objs = [o for o in bpy.data.objects if o.type == 'MESH' and not o.hide]
+
+        #if not objs:
+        #    self.log.info("Nothing to export")
+
+        #obj = objs[0]
+
+        canonicalId = obj.name.split("/")
+        self.log.debug("Exporting Canonical Id: %s" % str(canonicalId))
+
+        # obj.update_from_editmode()
+
+        bm = bmesh.new()
+        bm.from_mesh(obj.data)
+        bm.normal_update()
+
+        arxFaceType = bm.faces.layers.int.get('arx_facetype')
+        if not arxFaceType:
+            raise ArxException("Mesh is missing arx specific data layer: " + 'arx_facetype')
+        
+        arxTransVal = bm.faces.layers.float.get('arx_transval')
+        if not arxTransVal:
+            raise ArxException("Mesh is missing arx specific data layer: " + 'arx_transval')
+        
+        if not (math.isclose(obj.location[0], 0.0) and math.isclose(obj.location[1], 0.0) and math.isclose(obj.location[2], 0.0)):
+            raise ArxException("Object is moved, please apply the location to the vertex positions")
+        
+        if not (math.isclose(obj.rotation_euler[0], 0.0) and math.isclose(obj.rotation_euler[1], 0.0) and math.isclose(obj.rotation_euler[2], 0.0)):
+            raise ArxException("Object is rotated, please apply the rotation to the vertex positions")
+        
+        if not (math.isclose(obj.scale[0], 1.0) and math.isclose(obj.scale[1], 1.0) and math.isclose(obj.scale[2], 1.0)):
+            raise ArxException("Object is scaled, please apply the scale to the vertex positions")
+        
+
+        for f in bm.faces:
+            if len(f.loops) > 3:
+                raise ArxException("Face with more than 3 vertices found")
+
+        for o in bpy.data.objects:
+            for ms in o.material_slots:
+                if not ms.material.name.endswith('-mat'):
+                    raise ArxException("Material slot names must end with: " + '-mat')
+                    
+        
+        # Validate child empties representing action points
+        for child in bpy.data.objects:
+            if child.type == 'EMPTY' and child.parent == obj:
+                nameParts = child.name.split(".")
+                name = nameParts[0].lower()
+                print(nameParts)
+                if name.startswith("hit_"):
+                    pass
+                elif name == "view_attach":
+                    pass
+                elif name == "primary_attach":
+                    pass
+                elif name == "left_attach":
+                    pass
+                elif name == "weapon_attach":
+                    pass
+                elif name == "secondary_attach":
+                    pass
+                elif name == "fire":
+                    pass
+                else:
+                    self.log.warn("Unexpected child empty: {}".format(nameParts))
+                    
+        
+        # TODO validate the mesh
+
+        verts = []
+        
+        # First add all mesh vertices
+        # Reverse the 0.1 scale factor that was applied during import
+        scale_factor = 0.1
+        for v in bm.verts:
+            vertexNormals = [sc.normal for sc in bm.verts if sc.co == v.co]
+            normal = Vector((0.0, 0.0, 0.0))
+            for n in vertexNormals:
+                normal += v.normal
+            normal.normalize()
+            # Scale vertex coordinates back up to original Arx size
+            scaled_co = [coord / scale_factor for coord in v.co[:]]
+            verts.append(FtlVertex(
+                blender_pos_to_arx(scaled_co),
+                blender_pos_to_arx(normal)
+            ))
+        
+        originVertexIndex = -1
+        for index, vert in enumerate(verts):
+            if vert.xyz == (0.0, 0.0, 0.0):
+                #self.log.info("Origin vertex found at index {}".format(index))
+                originVertexIndex = index
+        
+        if originVertexIndex == -1:
+            self.log.info("Origin vertex not found, adding new one")
+            originVertexIndex = len(verts)
+            verts.append(FtlVertex((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)))
+        
+        metadata = FtlMetadata(name=obj.get('arx.ftl.name', ''), org=originVertexIndex)
+        
+        # Add action point vertices
+        actions = []
+        for o in bpy.data.objects:
+            if o.type == 'EMPTY' and o.parent == obj:
+                nameParts = o.name.split(".")
+                name = nameParts[0]
+                if o.parent_type == 'VERTEX':
+                    actionVertexIndex = o.parent_vertices[0]
+                    actions.append(FtlAction(name, actionVertexIndex))
+                elif o.parent_type == 'OBJECT':
+                    actionVertexIndex = len(verts)
+                    # Scale action point coordinates back up to original Arx size
+                    scaled_location = [coord / scale_factor for coord in o.location]
+                    verts.append(FtlVertex(tuple(scaled_location), (0.0, 0.0, 0.0)))
+                    actions.append(FtlAction(name, actionVertexIndex))
+                else:
+                    self.log.warn("Unhandled empty parent type {}".format(o.parent_type))
+
+        uvData = bm.loops.layers.uv.verify()
+
+        allXYZ = [v.xyz for v in verts]
+        faces = []
+
+        for f in bm.faces:
+            vertexIndices = []
+            vertexUvs = []
+            vertexNormals = []
+            for c in f.loops:
+                # Apply the same scaling as used for vertex creation to match allXYZ
+                scaled_co = [coord / scale_factor for coord in c.vert.co[:]]
+                vertexIndices.append(allXYZ.index(blender_pos_to_arx(scaled_co)))
+                vertexUvs.append((c[uvData].uv[0], 1 - c[uvData].uv[1]))
+                vertexNormals.append((c.vert.normal[0], c.vert.normal[1], c.vert.normal[2]))
+            mat = f.material_index
+
+            faceType = f[arxFaceType]
+            transval = f[arxTransVal]
+
+            faces.append(FtlFace(
+                vids=tuple(vertexIndices),
+                uvs=vertexUvs,
+                texid=mat,
+                facetype=faceType,
+                transval=transval,
+                normal=vertexNormals
+            ))
+
+        grps = []
+        sels = []
+
+        dvert_lay = bm.verts.layers.deform.active
+
+        for grp in obj.vertex_groups:
+            v = []
+            if dvert_lay is not None:
+                for vert in bm.verts:
+                    dvert = vert[dvert_lay]
+                    if grp.index in dvert:
+                        v.append(vert.index)
+
+            s = grp.name.split(":")
+            if s[0] == "grp":
+                armature = bpy.data.armatures.get("/".join(canonicalId))
+                if armature:
+                    origin = armature.bones[grp.name]["OriginVertex"]
+                else:
+                    # TODO hardcoded use of mesh vertex at index 0
+                    origin = 0
+                
+                # TODO get the real data from armature
+                parentIndex = -1
+                grps.append(FtlGroup(s[2], origin, v, parentIndex))
+            else:
+                sels.append(FtlSelection(s[2], v))
+
+        matNames = []
+        for o in bpy.data.objects:
+            for ms in o.material_slots:
+                mat = ms.material
+                # strip -mat suffix and decorate with bullshit
+                matNames.append('GRAPH\\OBJ3D\\TEXTURES\\' + mat.name[:-4] + ".FOO")
+
+        bm.free()
+
+        return FtlData(
+            metadata=metadata,
+            verts=verts,
+            faces=faces,
+            mats=matNames,
+            groups=grps,
+            actions=actions,
+            sels=sels
+        )
+
+    def saveFile(self, path):
+        # Get the active object from the current scene
+        obj = bpy.context.active_object
+        if obj is None or obj.type != 'MESH':
+            raise ArxException("No active mesh object to export")
+
+        data = self.toFtlData(obj)
+
+        binData = self.ftlSerializer.write(data)
+
+        with open(path, 'wb') as f:
+            f.write(binData)
+
+        self.log.debug("Written %i bytes to file %s" % (len(binData), path))
