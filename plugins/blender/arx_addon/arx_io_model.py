@@ -1,3 +1,20 @@
+# Copyright 2019-2020 Arx Libertatis Team (see the AUTHORS file)
+#
+# This file is part of Arx Libertatis.
+#
+# Arx Libertatis is free software: you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation, either version 3 of the License, or
+# (at your option) any later version.
+#
+# Arx Libertatis is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with Arx Libertatis. If not, see <http://www.gnu.org/licenses/>.
+
 import os
 import itertools
 import logging
@@ -10,9 +27,10 @@ from .arx_io_material import createMaterial
 from .arx_io_util import arx_pos_to_blender_for_model, blender_pos_to_arx, ArxException
 from .files import splitPath
 from .dataFtl import FtlMetadata, FtlVertex, FtlFace, FtlGroup, FtlSelection, FtlAction, FtlData, FtlSerializer
-import logging
+
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
 class ArxObjectManager(object):
     def __init__(self, ioLib, dataPath):
         self.log = logging.getLogger(__name__)
@@ -81,88 +99,76 @@ class ArxObjectManager(object):
         return bm
 
     def createArmature(self, canonicalId, bm, groups) -> bpy.types.Object:
-            amtname = "/".join(canonicalId) + "-amt"
-            amt = bpy.data.armatures.new(amtname)
-            amt.display_type = 'WIRE'
-            amtobject = bpy.data.objects.new(amtname, amt)
-            amtobject.location = (0, 0, 0)
-            bpy.context.scene.collection.objects.link(amtobject)
-            bpy.context.view_layer.objects.active = amtobject
-            amtobject.select_set(True)
-            bpy.ops.object.mode_set(mode='EDIT')
-            edit_bones = amt.edit_bones
-            scale_factor = 1  # Match model scale
-            edit_bones_array = []  # Store bones for parenting
+        amtname = "/".join(canonicalId) + "-amt"
+        amt = bpy.data.armatures.new(amtname)
+        amt.display_type = 'WIRE'
+        amtobject = bpy.data.objects.new(amtname, amt)
+        amtobject.location = (0, 0, 0)
+        bpy.context.scene.collection.objects.link(amtobject)
+        bpy.context.view_layer.objects.active = amtobject
+        amtobject.select_set(True)
+        bpy.ops.object.mode_set(mode='EDIT')
+        edit_bones = amt.edit_bones
+        scale_factor = 1  # Match model scale
+        edit_bones_array = []  # Store bones for parenting
+        
+        # First pass: Create all bones with proper positioning
+        for i, group in enumerate(groups):
+            bGrpName = "grp:" + str(i).zfill(2) + ":" + group.name
+            bone = edit_bones.new(bGrpName)
             
-            # First pass: Create all bones with proper positioning
-            for i, group in enumerate(groups):
-                bGrpName = "grp:" + str(i).zfill(2) + ":" + group.name
-                bone = edit_bones.new(bGrpName)
-                
-                # Set bone head to current group's origin
-                if group.origin >= 0 and group.origin < len(bm.verts):
-                    bone.head = bm.verts[group.origin].co * scale_factor
-                else:
-                    self.log.warning("Invalid origin index %d for group '%s', using (0,0,0)", group.origin, bGrpName)
-                    bone.head = Vector((0, 0, 0))
-                
-                # Set bone tail - this is where we fix the hierarchy
-                tail_set = False
-                
-                # Find children of this group to determine tail direction
-                children = [j for j, child_group in enumerate(groups) if child_group.parentIndex == i]
-                
-                if children:
-                    # If this bone has children, point towards the first child
-                    child_group = groups[children[0]]
-                    if child_group.origin >= 0 and child_group.origin < len(bm.verts):
-                        bone.tail = bm.verts[child_group.origin].co * scale_factor
-                        tail_set = True
-                
-                if not tail_set:
-                    # This is a leaf bone (no children) - determine direction based on parent
-                    if group.parentIndex >= 0 and group.parentIndex < len(groups):
-                        parent_group = groups[group.parentIndex]
-                        if parent_group.origin >= 0 and parent_group.origin < len(bm.verts):
-                            # Point away from parent
-                            parent_pos = bm.verts[parent_group.origin].co * scale_factor
-                            direction = bone.head - parent_pos
-                            if direction.length > 0.001:
-                                # Extend in the same direction as parent->current
-                                bone.tail = bone.head + direction.normalized() * (0.1 * scale_factor)
-                            else:
-                                # Fallback to Z-axis
-                                bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))
-                        else:
-                            # Fallback to Z-axis
-                            bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))
-                    else:
-                        # Root bone with no children - try different axes
-                        # You can experiment with these directions:
-                        bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))  # Z-axis
-                        # bone.tail = bone.head + Vector((0, 0.1 * scale_factor, 0))  # Y-axis
-                        # bone.tail = bone.head + Vector((0.1 * scale_factor, 0, 0))  # X-axis
-                        # bone.tail = bone.head + Vector((0, 0, -0.1 * scale_factor))  # -Z-axis
-                        # bone.tail = bone.head + Vector((0, -0.1 * scale_factor, 0))  # -Y-axis
-                        # bone.tail = bone.head + Vector((-0.1 * scale_factor, 0, 0))  # -X-axis
-                
-                # Ensure non-zero length
-                if (bone.tail - bone.head).length < 0.001 * scale_factor:
-                    bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))
-                
-                bone["OriginVertex"] = group.origin
-                edit_bones_array.append(bone)
-                self.log.debug("Created bone '%s' at head=%s, tail=%s", bGrpName, bone.head, bone.tail)
+            # Set bone head
+            if group.origin >= 0 and group.origin < len(bm.verts):
+                bone.head = bm.verts[group.origin].co * scale_factor
+            else:
+                self.log.warning("Invalid origin index %d for group '%s', using (0,0,0)", group.origin, bGrpName)
+                bone.head = Vector((0, 0, 0))
             
-            # Second pass: Set hierarchical parenting
-            for i, group in enumerate(groups):
+            # Set bone tail with improved logic
+            tail_set = False
+            children = [j for j, child_group in enumerate(groups) if child_group.parentIndex == i]
+            
+            if children:
+                # Point towards first child
+                child_group = groups[children[0]]
+                if child_group.origin >= 0 and child_group.origin < len(bm.verts):
+                    bone.tail = bm.verts[child_group.origin].co * scale_factor
+                    tail_set = True
+            
+            if not tail_set:
+                # For leaf bones, use parent direction or default to local bone orientation
                 if group.parentIndex >= 0 and group.parentIndex < len(groups):
-                    bone = edit_bones_array[i]
-                    bone.parent = edit_bones_array[group.parentIndex]
-                    self.log.debug("Set parent of bone '%s' to '%s'", bone.name, edit_bones_array[group.parentIndex].name)
+                    parent_group = groups[group.parentIndex]
+                    if parent_group.origin >= 0 and parent_group.origin < len(bm.verts):
+                        parent_pos = bm.verts[parent_group.origin].co * scale_factor
+                        direction = bone.head - parent_pos
+                        if direction.length > 0.001:
+                            bone.tail = bone.head + direction.normalized() * (0.1 * scale_factor)
+                        else:
+                            bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))  # Z-axis fallback
+                    else:
+                        bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))
+                else:
+                    # Root bone: Use group’s default orientation if available
+                    bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))
             
-            bpy.ops.object.mode_set(mode='OBJECT')
-            return amtobject
+            # Ensure non-zero length
+            if (bone.tail - bone.head).length < 0.001 * scale_factor:
+                bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))
+            
+            bone["OriginVertex"] = group.origin
+            edit_bones_array.append(bone)
+            self.log.debug("Created bone '%s' at head=%s, tail=%s", bGrpName, bone.head, bone.tail)
+        
+        # Second pass: Set hierarchical parenting
+        for i, group in enumerate(groups):
+            if group.parentIndex >= 0 and group.parentIndex < len(groups):
+                bone = edit_bones_array[i]
+                bone.parent = edit_bones_array[group.parentIndex]
+                self.log.debug("Set parent of bone '%s' to '%s'", bone.name, edit_bones_array[group.parentIndex].name)
+        
+        bpy.ops.object.mode_set(mode='OBJECT')
+        return amtobject
 
     def createObject(self, context, bm, data: FtlData, canonicalId, collection) -> bpy.types.Object:
         idString = "/".join(canonicalId)

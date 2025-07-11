@@ -54,7 +54,6 @@ class THEA_KEYFRAME_2014(LittleEndianStructure):
         ("time_frame",       c_int32),
     ]
 
-
 class THEA_KEYFRAME_2015(LittleEndianStructure):
     _pack_ = 1
     _fields_ = [
@@ -95,19 +94,15 @@ class THEA_SAMPLE(LittleEndianStructure):
         ("sample_size",  c_int32)
     ]
 
-
-
 from ctypes import sizeof
-
-
 from typing import List
 from collections import namedtuple
-
-TeaFrame = namedtuple("TeaFrame", ['duration', 'flags', 'translation', 'rotation', 'groups', 'sampleName'])
-
 import logging
+
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+TeaFrame = namedtuple("TeaFrame", ['duration', 'flags', 'translation', 'rotation', 'groups', 'sampleName'])
 
 class TeaSerializer(object):
     def __init__(self):
@@ -120,12 +115,10 @@ class TeaSerializer(object):
         self.log.debug("Read %i bytes from file %s", len(data), fileName)
 
         pos = 0
-
         header = THEA_HEADER.from_buffer_copy(data, pos)
         pos += sizeof(THEA_HEADER)
 
         self.log.debug("Header: Frames=%d, KeyFrames=%d", header.nb_frames, header.nb_key_frames)
-
         self.log.debug(
             "Header - Identity: {0}; Version: {1}; Frames: {2}; Groups {3}; KeyFrames {4}".format(
                 header.identity, header.version, header.nb_frames, header.nb_groups, header.nb_key_frames))
@@ -138,6 +131,7 @@ class TeaSerializer(object):
             raise UnexpectedValueException("header.nb_key_frames = " + str(header.nb_key_frames))
 
         results = []
+        default_frame_rate = 24.0  # Configurable default
         for i in range(header.nb_key_frames):
             if header.version == 2014:
                 kf = THEA_KEYFRAME_2014.from_buffer_copy(data, pos)
@@ -151,7 +145,13 @@ class TeaSerializer(object):
                 raise SerializationException("Unknown version: " + str(header.version))
 
             self.log.debug("Keyframe %d: raw time_frame=%d", i, kf.time_frame)
-            duration = kf.time_frame / 1000.0 if kf.time_frame > 0 else 41.67  # Assume microseconds, fallback 24 FPS
+            if kf.time_frame > 0:
+                duration = kf.time_frame / 1000.0  # Convert microseconds to seconds
+            else:
+                duration = 1.0 / default_frame_rate
+                self.log.warning("Invalid time_frame=%d for keyframe %d, using default duration %.3fs",
+                                 kf.time_frame, i, duration)
+
             flags = kf.flag_frame
             if flags not in (-1, 9):
                 raise UnexpectedValueException("flag_frame = " + str(flags))

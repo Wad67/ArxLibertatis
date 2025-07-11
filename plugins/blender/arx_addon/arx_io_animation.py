@@ -16,19 +16,14 @@
 # along with Arx Libertatis. If not, see <http://www.gnu.org/licenses/>.
 
 import logging
-logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
-import bpy  
+import bpy
 import re
 from mathutils import Vector, Quaternion, Matrix
-from .arx_io_util import arx_pos_to_blender_for_model, blender_pos_to_arx, ArxException
+from .arx_io_util import arx_pos_to_blender_for_model, arx_transform_to_blender, ArxException
 from .dataTea import TeaSerializer
 
-def arx_transform_to_blender(location, rotation, scale, scale_factor=0.1):
-    loc = arx_pos_to_blender_for_model(location) * scale_factor
-    rot = Quaternion((rotation.w, rotation.x, rotation.y, rotation.z))
-    scl = Vector((1.0, 1.0, 1.0)) if scale.length == 0 else Vector((scale.x, scale.z, scale.y))
-    return loc, rot, scl
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 def parse_group_index(name):
     """
@@ -36,16 +31,12 @@ def parse_group_index(name):
     Handles formats like 'grp:23:toe4', 'grp:00:all', etc.
     Returns the numeric index or None if not found.
     """
-    # Try to match pattern like 'grp:XX:name'
     match = re.match(r'grp:(\d+):', name)
     if match:
         return int(match.group(1))
-    
-    # Try to match pattern like 'group_XX' or similar
     match = re.search(r'(\d+)', name)
     if match:
         return int(match.group(1))
-    
     return None
 
 class ArxAnimationManager(object):
@@ -53,9 +44,17 @@ class ArxAnimationManager(object):
         self.log = logging.getLogger(__name__)
         self.teaSerializer = TeaSerializer()
 
-    def build_bone_index_map(self, armature_obj):
+    def build_mappings(self, armature_obj, obj, data):
         """
-        Build a mapping from group indices to bone objects.
+        Build mappings from group indices to bones and vertex groups.
+        Args:
+            armature_obj: Blender armature object.
+            obj: Blender mesh object.
+            data: List of TeaFrame objects from TeaSerializer.read.
+        Returns:
+            bone_map: Dict mapping group indices to bones.
+            vg_map: Dict mapping group indices to vertex group names.
+            animatable_indices: Set of indices that can be animated.
         """
         bone_map = {}
         for bone in armature_obj.pose.bones:
@@ -66,12 +65,6 @@ class ArxAnimationManager(object):
             else:
                 self.log.warning("Could not parse group index from bone name: %s", bone.name)
         
-        return bone_map
-
-    def build_vertex_group_index_map(self, obj):
-        """
-        Build a mapping from group indices to vertex group names.
-        """
         vg_map = {}
         for vg in obj.vertex_groups:
             group_index = parse_group_index(vg.name)
@@ -81,9 +74,141 @@ class ArxAnimationManager(object):
             else:
                 self.log.warning("Could not parse group index from vertex group name: %s", vg.name)
         
-        return vg_map
+        num_groups = len(data[0].groups)
+        animatable_indices = set(bone_map.keys()) & set(range(num_groups))
+        self.log.info("Can animate %d groups (indices: %s)", len(animatable_indices), sorted(animatable_indices))
+        
+        return bone_map, vg_map, animatable_indices
 
-    def loadAnimation(self, path, action_name=None, frame_rate=24.0, scale_factor=0.1, axis_transform=None):
+    def calculate_frame_timing(self, data, frame_rate):
+        """
+        Calculate Blender frame numbers from TEA frame durations.
+        Args:
+            data: List of TeaFrame objects.
+            frame_rate: Target frame rate (frames per second).
+        Returns:
+            frame_times: List of cumulative times (seconds) for each frame.
+            blender_frames: List of corresponding Blender frame numbers.
+            total_duration: Total animation duration in seconds.
+            total_blender_frames: Total number of Blender frames.
+        """
+        current_time = 0.0
+        frame_times = []
+        blender_frames = []
+        min_frame_duration = 1.0 / frame_rate
+        
+        for frame_index, frame in enumerate(data):
+            frame_times.append(current_time)
+            blender_frame_float = (current_time * frame_rate) + 1.0
+            blender_frame = max(1, round(blender_frame_float))
+            blender_frames.append(blender_frame)
+            
+            duration_seconds = max(frame.duration, min_frame_duration)
+            current_time += duration_seconds
+            
+            self.log.debug("TEA frame %d: time=%.3fs -> Blender frame %d (duration=%dms)", 
+                           frame_index, frame_times[-1], blender_frame, frame.duration * 1000)
+        
+        total_duration = current_time
+        total_blender_frames = max(len(data), round(total_duration * frame_rate))
+        
+        if total_blender_frames < len(data):
+            self.log.warning("Animation too short (%d frames), adjusting to %d frames", 
+                             total_blender_frames, len(data))
+            blender_frames = list(range(1, len(data) + 1))
+            total_blender_frames = len(data)
+        
+        self.log.info("Total animation duration: %.3fs (%d TEA frames) -> %d Blender frames at %.1f fps", 
+                      total_duration, len(data), total_blender_frames, frame_rate)
+        
+        return frame_times, blender_frames, total_duration, total_blender_frames
+
+    def apply_frame_transforms(self, frame, frame_index, blender_frame, obj, armature_obj, bone_map, animatable_indices, scale_factor, flip_w, flip_x, flip_y, flip_z):
+        """
+        Apply transformations for a single TEA frame to Blender objects and bones.
+        Args:
+            frame: TeaFrame object containing animation data.
+            frame_index: Index of the current frame.
+            blender_frame: Corresponding Blender frame number.
+            obj: Blender mesh object.
+            armature_obj: Blender armature object.
+            bone_map: Dict mapping group indices to bones.
+            animatable_indices: Set of indices that can be animated.
+            scale_factor: Scaling factor for positions.
+            flip_w, flip_x, flip_y, flip_z: Boolean flags for quaternion component flipping.
+        """
+        bpy.context.scene.frame_set(blender_frame)
+        self.log.debug("Processing TEA frame %d -> Blender frame %d: duration=%dms", 
+                       frame_index, blender_frame, frame.duration * 1000)
+
+        if frame.translation or frame.rotation:
+            bpy.ops.object.mode_set(mode='OBJECT')
+            bpy.context.view_layer.objects.active = obj
+            
+            if frame.translation:
+                root_location = Vector((frame.translation.x, frame.translation.y, frame.translation.z))
+                root_location *= 0.1
+                root_loc, _, _ = arx_transform_to_blender(root_location, Quaternion((1,0,0,0)), Vector((1,1,1)), scale_factor, flip_w, flip_x, flip_y, flip_z)
+                if frame_index == 0:
+                    obj.location = root_loc
+                else:
+                    obj.location = obj.location + root_loc
+                obj.keyframe_insert(data_path="location")
+                self.log.debug("Frame %d: Applied root translation=%s to mesh", frame_index, root_loc)
+
+            if frame.rotation:
+                root_rotation = Quaternion((frame.rotation.w, frame.rotation.x, frame.rotation.y, frame.rotation.z))
+                _, root_rot, _ = arx_transform_to_blender(Vector((0,0,0)), root_rotation, Vector((1,1,1)), scale_factor, flip_w, flip_x, flip_y, flip_z)
+                obj.rotation_mode = 'QUATERNION'
+                obj.rotation_quaternion = root_rot
+                obj.keyframe_insert(data_path="rotation_quaternion")
+                self.log.debug("Frame %d: Applied root rotation=%s to mesh", frame_index, root_rot)
+            
+            bpy.context.view_layer.objects.active = armature_obj
+            bpy.ops.object.mode_set(mode='POSE')
+
+        for group_index in animatable_indices:
+            group = frame.groups[group_index]
+            bone = bone_map[group_index]
+            
+            if group.key_group == -1:
+                continue
+
+            self.log.debug("Frame %d, Group %d, Bone %s: translate=%s, Quaternion=%s, zoom=%s",
+                           frame_index, group_index, bone.name, group.translate, group.Quaternion, group.zoom)
+
+            location = Vector((group.translate.x, group.translate.y, group.translate.z))
+            rotation = Quaternion((group.Quaternion.w, group.Quaternion.x, group.Quaternion.y, group.Quaternion.z))
+            scale = Vector((group.zoom.x, group.zoom.y, group.zoom.z))
+            
+            loc, rot, scl = arx_transform_to_blender(location, rotation, scale, scale_factor, flip_w, flip_x, flip_y, flip_z)
+            
+            bone.location = loc
+            bone.rotation_mode = 'QUATERNION'
+            bone.rotation_quaternion = rot
+            bone.scale = scl
+            
+            bone.keyframe_insert(data_path="location")
+            bone.keyframe_insert(data_path="rotation_quaternion")
+            bone.keyframe_insert(data_path="scale")
+            
+            if frame_index in (0, len(frame.groups) - 1):
+                self.log.debug("Frame %d, Group %d, Bone %s: Applied loc=%s, rot=%s, scl=%s, matrix=%s", 
+                               frame_index, group_index, bone.name, loc, rot, scl, bone.matrix)
+
+    def loadAnimation(self, path, action_name=None, frame_rate=24.0, scale_factor=0.1, axis_transform=None, flip_w=True, flip_x=False, flip_y=True, flip_z=False):
+        """
+        Load an animation from a TEA file and apply it to the active mesh and its armature.
+        Args:
+            path: Path to the TEA file.
+            action_name: Name for the Blender action (optional).
+            frame_rate: Target frame rate (default 24.0).
+            scale_factor: Scaling factor for positions (default 0.1).
+            axis_transform: Optional function to transform coordinates (if None, uses arx_transform_to_blender).
+            flip_w, flip_x, flip_y, flip_z: Boolean flags for quaternion component flipping.
+        Returns:
+            The created Blender action, or None if the import fails.
+        """
         data = self.teaSerializer.read(path)
         if not data:
             self.log.error("No animation data loaded from file: {}".format(path))
@@ -94,7 +219,6 @@ class ArxAnimationManager(object):
             self.log.error("No mesh object selected for animation import")
             return None
 
-        # Find the armature
         armature_obj = None
         for modifier in obj.modifiers:
             if modifier.type == 'ARMATURE' and modifier.object:
@@ -105,192 +229,47 @@ class ArxAnimationManager(object):
             self.log.error("No armature found for mesh '%s'", obj.name)
             return None
 
-
-        # Build index mappings
-        bone_map = self.build_bone_index_map(armature_obj)
-        vg_map = self.build_vertex_group_index_map(obj)
+        bone_map, vg_map, animatable_indices = self.build_mappings(armature_obj, obj, data)
+        
+        if not animatable_indices:
+            self.log.error("No matching bone indices found for animation groups")
+            return None
 
         self.log.info("Mesh '%s' has %d vertex groups, %d with parseable indices", 
                       obj.name, len(obj.vertex_groups), len(vg_map))
         self.log.info("Armature '%s' has %d bones, %d with parseable indices", 
                       armature_obj.name, len(armature_obj.pose.bones), len(bone_map))
 
-        num_groups = len(data[0].groups)
-        self.log.info("Animation has %d groups per frame", num_groups)
-
-        # Check what indices we can actually animate
-        animatable_indices = set(bone_map.keys()) & set(range(num_groups))
-        self.log.info("Can animate %d groups (indices: %s)", 
-                      len(animatable_indices), sorted(animatable_indices))
-
-        if not animatable_indices:
-            self.log.error("No matching bone indices found for animation groups")
-            return None
-
-        # Create or update animation action for armature
         if not armature_obj.animation_data:
             armature_obj.animation_data_create()
-
-        # Also ensure mesh has animation data for root motion
         if not obj.animation_data:
             obj.animation_data_create()
 
         action_name = action_name or f"{armature_obj.name}_{path.split('/')[-1].replace('.tea', '')}"
         
-        # Clear existing action if it exists
         for action in bpy.data.actions:
             if action.name == action_name:
                 bpy.data.actions.remove(action)
 
         action = bpy.data.actions.new(action_name)
         armature_obj.animation_data.action = action
-        # Use the same action for mesh root motion
         obj.animation_data.action = action
         
-        # Set up for animation
         bpy.context.scene.frame_set(1)
-        
-        # Switch to pose mode once
         bpy.context.view_layer.objects.active = armature_obj
         bpy.ops.object.mode_set(mode='POSE')
 
-        # Calculate timing properly - first pass to get total duration and frame mapping
-        current_time = 0.0
-        frame_times = []
-        blender_frames = []
-        
+        frame_times, blender_frames, total_duration, total_blender_frames = self.calculate_frame_timing(data, frame_rate)
+
         for frame_index, frame in enumerate(data):
-            # Store the current time for this frame
-            frame_times.append(current_time)
-            
-            # Convert time to Blender frame (keep as float initially)
-            blender_frame_float = (current_time * frame_rate) + 1.0
-            blender_frame = max(1, round(blender_frame_float))  # Round instead of truncate
-            blender_frames.append(blender_frame)
-            
-            # Convert duration from milliseconds to seconds
-            duration_seconds = frame.duration / 1000.0
-            current_time += duration_seconds
-            
-            self.log.debug("TEA frame %d: time=%.3fs -> Blender frame %d (duration=%dms)", 
-                          frame_index, frame_times[-1], blender_frame, frame.duration)
-        
-        total_duration = current_time
-        total_blender_frames = max(1, round(total_duration * frame_rate))
-        
-        self.log.info("Total animation duration: %.3fs (%d TEA frames) -> %d Blender frames at %.1f fps", 
-                      total_duration, len(data), total_blender_frames, frame_rate)
-        
-        # If animation is very short, ensure minimum frame spread
-        if total_blender_frames < len(data):
-            self.log.warning("Animation too short (%d frames), spreading across %d frames", 
-                            total_blender_frames, len(data))
-            # Recalculate with minimum 1 frame per TEA frame
-            for i in range(len(data)):
-                blender_frames[i] = i + 1
-            total_blender_frames = len(data)
-        
-        # Now process each frame with correct timing
-        for frame_index, frame in enumerate(data):
-            blender_frame = blender_frames[frame_index]
-            
-            # Set current frame
-            bpy.context.scene.frame_set(blender_frame)
-            
-            self.log.debug("Processing TEA frame %d -> Blender frame %d: duration=%dms", 
-                          frame_index, blender_frame, frame.duration)
+            self.apply_frame_transforms(
+                frame, frame_index, blender_frames[frame_index], obj, armature_obj,
+                bone_map, animatable_indices, scale_factor, flip_w, flip_x, flip_y, flip_z
+            )
 
-            # Handle root motion (global transforms) - apply to mesh object
-            if frame.translation or frame.rotation:
-                # Switch to object mode temporarily for mesh transforms
-                bpy.ops.object.mode_set(mode='OBJECT')
-                bpy.context.view_layer.objects.active = obj
-                
-                if frame.translation:
-                    # Scale down root motion significantly - it's way too large
-                    root_location = Vector((frame.translation.x, frame.translation.y, frame.translation.z))
-                    root_location *= 0.1  # Scale down by 100x to start
-                    
-                    if axis_transform:
-                        root_loc, _, _ = axis_transform(root_location, Quaternion((1,0,0,0)), Vector((1,1,1)), scale_factor)
-                    else:
-                        root_loc, _, _ = arx_transform_to_blender(root_location, Quaternion((1,0,0,0)), Vector((1,1,1)), scale_factor)
-                    
-                    # Set absolute position, not accumulate
-                    if frame_index == 0:
-                        obj.location = root_loc
-                    else:
-                        obj.location = obj.location + root_loc
-                    obj.keyframe_insert(data_path="location")
-                    self.log.debug("Frame %d: Applied root translation=%s to mesh", frame_index, root_loc)
-
-                if frame.rotation:
-                    root_rotation = Quaternion((frame.rotation.w, frame.rotation.x, frame.rotation.y, frame.rotation.z))
-                    if axis_transform:
-                        _, root_rot, _ = axis_transform(Vector((0,0,0)), root_rotation, Vector((1,1,1)), scale_factor)
-                    else:
-                        _, root_rot, _ = arx_transform_to_blender(Vector((0,0,0)), root_rotation, Vector((1,1,1)), scale_factor)
-                    
-                    # Set absolute rotation
-                    obj.rotation_mode = 'QUATERNION'
-                    obj.rotation_quaternion = root_rot
-                    obj.keyframe_insert(data_path="rotation_quaternion")
-                    self.log.debug("Frame %d: Applied root rotation=%s to mesh", frame_index, root_rot)
-                
-                # Switch back to pose mode
-                bpy.context.view_layer.objects.active = armature_obj
-                bpy.ops.object.mode_set(mode='POSE')
-
-            # Process each animation group (bone transforms)
-            for group_index in range(min(num_groups, len(frame.groups))):
-                if group_index not in bone_map:
-                    continue  # Skip groups that don't have corresponding bones
-
-                group = frame.groups[group_index]
-                bone = bone_map[group_index]
-
-                # Skip inactive groups
-                if group.key_group == -1:
-                    continue
-
-                self.log.debug("Frame %d, Group %d, Bone %s: translate=%s, Quaternion=%s, zoom=%s",
-                               frame_index, group_index, bone.name, 
-                               group.translate, group.Quaternion, group.zoom)
-
-                # Extract transform data
-                location = Vector((group.translate.x, group.translate.y, group.translate.z))
-                rotation = Quaternion((group.Quaternion.w, group.Quaternion.x, 
-                                      group.Quaternion.y, group.Quaternion.z))
-                scale = Vector((group.zoom.x, group.zoom.y, group.zoom.z))
-
-                # Apply coordinate system transform
-                if axis_transform:
-                    loc, rot, scl = axis_transform(location, rotation, scale, scale_factor)
-                else:
-                    loc, rot, scl = arx_transform_to_blender(location, rotation, scale, scale_factor)
-
-                # Apply transforms to bone
-                bone.location = loc
-                bone.rotation_mode = 'QUATERNION'
-                bone.rotation_quaternion = rot
-                bone.scale = scl
-
-                # Insert keyframes
-                bone.keyframe_insert(data_path="location")
-                bone.keyframe_insert(data_path="rotation_quaternion")
-                bone.keyframe_insert(data_path="scale")
-
-                if frame_index == 1:
-                  self.log.debug("Frame %d, Group %d, Bone %s: Applied loc=%s, rot=%s, scl=%s", 
-                                 frame_index, group_index, bone.name, loc, rot, scl)
-
-        # Return to object mode once at the end
         bpy.ops.object.mode_set(mode='OBJECT')
-
-        # Set animation end frame based on calculated total
         bpy.context.scene.frame_end = total_blender_frames
 
-        # Set all keyframes to LINEAR interpolation
         for fcurve in action.fcurves:
             for keyframe in fcurve.keyframe_points:
                 keyframe.interpolation = 'LINEAR'

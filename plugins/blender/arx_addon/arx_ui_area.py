@@ -20,7 +20,7 @@ import os
 from bpy.props import IntProperty, BoolProperty, StringProperty, CollectionProperty, PointerProperty, EnumProperty
 from bpy.types import Operator, Panel, PropertyGroup, UIList
 from mathutils import Matrix, Vector, Quaternion
-from .arx_io_util import ArxException, arx_pos_to_blender_for_model
+from .arx_io_util import ArxException, arx_pos_to_blender_for_model, arx_transform_to_blender
 from .managers import getAddon
 import math
 
@@ -134,13 +134,9 @@ class ArxOperatorRefreshModelList(Operator):
         addon = getAddon(context)
         arx_files = addon.arxFiles
         
-        # Update ArxFiles data
         arx_files.updateAll()
-        
-        # Clear existing model list
         context.scene.arx_model_list_props.model_list.clear()
         
-        # Populate model list
         for key in arx_files.models.data.keys():
             if key[0] == "npc":
                 item = context.scene.arx_model_list_props.model_list.add()
@@ -169,13 +165,12 @@ class ArxOperatorTestGoblinAnimations(Operator):
 
     def execute(self, context):
         addon = getAddon(context)
-        arx_files = getAddon(context).arxFiles
-        # Ensure ArxFiles is updated
+        arx_files = addon.arxFiles
         if not arx_files.models.data or not arx_files.animations.data:
             arx_files.updateAll()
             print(f"Models: {list(arx_files.models.data.keys())}")
             print(f"Animations: {list(arx_files.animations.data.keys())}")
-        # Clear existing objects
+        
         bpy.ops.object.select_all(action='SELECT')
         bpy.ops.object.delete(use_global=False)
         for action in bpy.data.actions:
@@ -186,26 +181,28 @@ class ArxOperatorTestGoblinAnimations(Operator):
             bpy.data.meshes.remove(mesh)
         for armature in bpy.data.armatures:
             bpy.data.armatures.remove(armature)
-        # Get selected model
+        
         props = context.scene.arx_animation_test
         model_name = props.model
         if not model_name:
             self.report({'ERROR'}, "No model selected")
             return {'CANCELLED'}
+        
         model_key = tuple(["npc", model_name])
         if model_key not in arx_files.models.data:
             self.report({'ERROR'}, f"Model {model_name} not found in ArxFiles")
             return {'CANCELLED'}
+        
         model_data = arx_files.models.data[model_key]
         model_path = os.path.join(model_data.path, model_data.model)
-        # Import model
-        obj = None
+        
         try:
             addon.objectManager.loadFile(context, model_path, context.scene, import_tweaks=False)
         except ArxException as e:
             self.report({'ERROR'}, f"Failed to import model {model_name}: {str(e)}")
             return {'CANCELLED'}
-        # Find mesh
+        
+        obj = None
         for o in bpy.data.objects:
             if o.name.startswith(f"npc/{model_name}") and o.type == 'MESH':
                 obj = o
@@ -213,7 +210,7 @@ class ArxOperatorTestGoblinAnimations(Operator):
         if not obj:
             self.report({'ERROR'}, f"Model mesh {model_name} not found")
             return {'CANCELLED'}
-        # Find armature
+        
         armature_obj = None
         for o in bpy.data.objects:
             if o.name.startswith(f"npc/{model_name}") and o.type == 'ARMATURE':
@@ -227,36 +224,33 @@ class ArxOperatorTestGoblinAnimations(Operator):
         if not armature_obj:
             self.report({'ERROR'}, f"No armature found for mesh '{obj.name}'")
             return {'CANCELLED'}
-        # Validate animation
+        
         anim_name = props.animation
         if not anim_name:
             self.report({'ERROR'}, "No animation selected")
             return {'CANCELLED'}
+        
         anim_key = anim_name
         if anim_key not in arx_files.animations.data:
             self.report({'ERROR'}, f"Animation {anim_key} not found in ArxFiles")
             return {'CANCELLED'}
+        
         anim_path = arx_files.animations.data[anim_key]
-        # Set up animation import
         frame_rate = context.scene.render.fps
-        axis_mapping = {
-            'XYZ': Matrix([[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]]),
-            'XZY': Matrix([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]]),
-            'YZX': Matrix([[0, 0, -1, 0], [0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1]]),
-            'ZXY': Matrix([[0, 1, 0, 0], [0, 0, 1, 0], [1, 0, 0, 0], [0, 0, 0, 1]]),
-            'ZYX': Matrix([[0, 0, 1, 0], [0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1]]),
-            'YXZ': Matrix([[0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 1, 0], [0, 0, 0, 1]])
-        }[props.axis_mapping]
-        def arx_transform_to_blender(location, rotation, scale, scale_factor=0.1):
-            loc = arx_pos_to_blender_for_model(location) * scale_factor
-            rot = Quaternion((rotation.w, rotation.x, rotation.y, rotation.z))
-            scl = Vector((1.0, 1.0, 1.0)) if scale.length == 0 else Vector((scale.x, scale.z, scale.y))
-            return loc, rot, scl
-        # Import animation
+        
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)
         try:
-            action = addon.animationManager.loadAnimation(anim_path, f"g{model_name}_{anim_name}", frame_rate=frame_rate, axis_transform=arx_transform_to_blender)
+            action = addon.animationManager.loadAnimation(
+                anim_path, 
+                f"g{model_name}_{anim_name}", 
+                frame_rate=frame_rate, 
+                axis_transform=None,
+                flip_w=props.flip_w,
+                flip_x=props.flip_x,
+                flip_y=props.flip_y,
+                flip_z=props.flip_z
+            )
             if action is None:
                 self.report({'ERROR'}, f"Failed to apply animation {anim_key}: possible group count mismatch (check log)")
                 return {'CANCELLED'}
@@ -264,6 +258,7 @@ class ArxOperatorTestGoblinAnimations(Operator):
         except ArxException as e:
             self.report({'ERROR'}, f"Failed to import {anim_key}: {str(e)}")
             return {'CANCELLED'}
+        
         return {'FINISHED'}
 
 class ArxAnimationTestPanel(Panel):
@@ -279,28 +274,21 @@ class ArxAnimationTestPanel(Panel):
         addon = getAddon(context)
         arx_files = addon.arxFiles
         
-        # Check if model list is loaded
         if not context.scene.arx_model_list_props.model_list_loaded:
             layout.operator("arx.refresh_model_list", text="Load Models")
             return
         
-        # Show refresh button
         layout.operator("arx.refresh_model_list", text="Refresh Models")
         
-        # Check if models are available
         if not context.scene.arx_model_list_props.model_list:
             layout.label(text="WARNING: No NPC models found", icon='ERROR')
             return
         
-        # Model selection
         row = layout.row()
         row.label(text="Model:")
         row.operator("arx.select_model", text=props.model if props.model else "Select Model")
         
-        # Animation selection
         if props.model:
-            # Get available animations for the selected model
-            # Look for animations that contain the model name anywhere in the filename
             anim_list = [
                 anim for anim in sorted(arx_files.animations.data.keys())
                 if props.model.lower() in anim.lower()
@@ -311,14 +299,12 @@ class ArxAnimationTestPanel(Panel):
             if not anim_list:
                 layout.label(text="WARNING: No animations found for selected model", icon='ERROR')
         
-        # Animation settings
         layout.prop(props, "axis_mapping", text="Axis Mapping")
         layout.prop(props, "flip_w", text="Flip W")
         layout.prop(props, "flip_x", text="Flip X")
         layout.prop(props, "flip_y", text="Flip Y")
         layout.prop(props, "flip_z", text="Flip Z")
         
-        # Test button
         layout.operator("arx.test_goblin_animations", text="Test Selected Animation")
 
 class ArxSelectModelOperator(Operator):
@@ -349,7 +335,7 @@ class ArxSetModelOperator(Operator):
     def execute(self, context):
         props = context.scene.arx_animation_test
         props.model = self.model
-        props.animation = ""  # Reset animation
+        props.animation = ""
         return {'FINISHED'}
 
 class ArxSelectAnimationOperator(Operator):
@@ -366,14 +352,13 @@ class ArxSelectAnimationOperator(Operator):
         props = context.scene.arx_animation_test
         arx_files = getAddon(context).arxFiles
         matching_anims = []
-        model_words = props.model.lower().split('_')  # Split model name into words
+        model_words = props.model.lower().split('_')
         for anim in sorted(arx_files.animations.data.keys()):
             anim_lower = anim.lower()
-            if any(word in anim_lower for word in model_words):  # Check if any word matches
+            if any(word in anim_lower for word in model_words):
                 matching_anims.append(anim)
         
         for anim in matching_anims:
-            # Display the full animation name, removing .tea extension if present
             display_name = anim.replace('.tea', '') if anim.endswith('.tea') else anim
             layout.operator("arx.set_animation", text=display_name).animation = anim
         

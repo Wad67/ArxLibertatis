@@ -15,7 +15,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Arx Libertatis. If not, see <http://www.gnu.org/licenses/>.
 
-from mathutils import Vector
+from mathutils import Vector, Matrix, Quaternion
 
 class ArxException(Exception):
     """Common exception thrown by this addon"""
@@ -31,3 +31,28 @@ def arx_pos_to_blender_for_model(pos):
 
 def blender_pos_to_arx(pos):
     return (pos[0], -pos[2], pos[1])
+
+def arx_transform_to_blender(location, rotation, scale, scale_factor=0.1, flip_w=True, flip_x=False, flip_y=True, flip_z=False):
+    # Transform location
+    loc = arx_pos_to_blender_for_model(location) * scale_factor
+    
+    # Transform quaternion
+    rot = Quaternion((rotation.w, rotation.x, rotation.y, rotation.z))
+    # Apply flips
+    w, x, y, z = rot
+    rot = Quaternion((
+        -w if flip_w else w,
+        -x if flip_x else x,
+        -y if flip_y else y,
+        -z if flip_z else z
+    ))
+    # Apply coordinate system transformation
+    rot_matrix = rot.to_matrix().to_4x4()
+    transform_matrix = Matrix([[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1]])  # x=>x, y=>-z, z=>y
+    transformed_matrix = transform_matrix @ rot_matrix @ transform_matrix.inverted()
+    rot = transformed_matrix.to_quaternion()
+    
+    # Transform scale
+    scl = Vector((1.0, 1.0, 1.0)) if scale.length == 0 else Vector((scale.x, scale.z, scale.y))
+    
+    return loc, rot, scl
