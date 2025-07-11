@@ -22,6 +22,7 @@ from bpy.types import Operator, Panel, PropertyGroup, UIList
 from mathutils import Matrix, Vector, Quaternion
 from .arx_io_util import ArxException, arx_pos_to_blender_for_model
 from .managers import getAddon
+import math
 
 g_areaToLevel = {
     0:0, 8:0, 11:0, 12:0,
@@ -249,16 +250,6 @@ class ArxOperatorTestGoblinAnimations(Operator):
         def arx_transform_to_blender(location, rotation, scale, scale_factor=0.1):
             loc = arx_pos_to_blender_for_model(location) * scale_factor
             rot = Quaternion((rotation.w, rotation.x, rotation.y, rotation.z))
-            rot = (axis_mapping @ rot.to_matrix().to_4x4() @ axis_mapping.inverted()).to_quaternion()
-            if props.flip_w:
-                rot.w = -rot.w
-            if props.flip_x:
-                rot.x = -rot.x
-            if props.flip_y:
-                rot.y = -rot.y
-            if props.flip_z:
-                rot.z = -rot.z
-            rot.normalize()
             scl = Vector((1.0, 1.0, 1.0)) if scale.length == 0 else Vector((scale.x, scale.z, scale.y))
             return loc, rot, scl
         # Import animation
@@ -374,11 +365,11 @@ class ArxSelectAnimationOperator(Operator):
         layout = self.layout
         props = context.scene.arx_animation_test
         arx_files = getAddon(context).arxFiles
-        
-        # Find animations that contain the model name anywhere in the filename
         matching_anims = []
+        model_words = props.model.lower().split('_')  # Split model name into words
         for anim in sorted(arx_files.animations.data.keys()):
-            if props.model.lower() in anim.lower():
+            anim_lower = anim.lower()
+            if any(word in anim_lower for word in model_words):  # Check if any word matches
                 matching_anims.append(anim)
         
         for anim in matching_anims:

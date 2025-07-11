@@ -96,7 +96,7 @@ class THEA_SAMPLE(LittleEndianStructure):
     ]
 
 
-import logging
+
 from ctypes import sizeof
 
 
@@ -105,101 +105,75 @@ from collections import namedtuple
 
 TeaFrame = namedtuple("TeaFrame", ['duration', 'flags', 'translation', 'rotation', 'groups', 'sampleName'])
 
+import logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
+
 class TeaSerializer(object):
     def __init__(self):
-        self.log = logging.getLogger('TeaSerializer')
+        self.log = logging.getLogger(__name__)
 
     def read(self, fileName) -> List[TeaFrame]:
         f = open(fileName, "rb")
         data = f.read()
         f.close()
-        self.log.debug("Read %i bytes from file %s" % (len(data), fileName))
+        self.log.debug("Read %i bytes from file %s", len(data), fileName)
 
         pos = 0
 
         header = THEA_HEADER.from_buffer_copy(data, pos)
         pos += sizeof(THEA_HEADER)
 
+        self.log.debug("Header: Frames=%d, KeyFrames=%d", header.nb_frames, header.nb_key_frames)
+
         self.log.debug(
-            "Header - Identity: {0}; Version: {1}; Frames: {2}; Groups {3}; KeyFrames {4}".format(header.identity,
-                                                                                                  header.version,
-                                                                                                  header.nb_frames,
-                                                                                                  header.nb_groups,
-                                                                                                  header.nb_key_frames))
+            "Header - Identity: {0}; Version: {1}; Frames: {2}; Groups {3}; KeyFrames {4}".format(
+                header.identity, header.version, header.nb_frames, header.nb_groups, header.nb_key_frames))
 
         if header.nb_frames < 0:
             raise UnexpectedValueException("header.nb_frames = " + str(header.nb_frames))
-
         if header.nb_groups < 0:
             raise UnexpectedValueException("header.nb_groups = " + str(header.nb_groups))
-
         if header.nb_key_frames < 0:
             raise UnexpectedValueException("header.nb_key_frames = " + str(header.nb_key_frames))
 
         results = []
         for i in range(header.nb_key_frames):
-            # self.log.debug("Reading Keyframe {0}".format(i))
             if header.version == 2014:
                 kf = THEA_KEYFRAME_2014.from_buffer_copy(data, pos)
                 pos += sizeof(THEA_KEYFRAME_2014)
             elif header.version == 2015:
                 kf = THEA_KEYFRAME_2015.from_buffer_copy(data, pos)
                 pos += sizeof(THEA_KEYFRAME_2015)
-
                 if kf.info_frame:
-                    self.log.info("Keyframe str: " + kf.info_frame.decode('iso-8859-1'))
+                    self.log.info("Keyframe str: %s", kf.info_frame.decode('iso-8859-1'))
             else:
                 raise SerializationException("Unknown version: " + str(header.version))
 
-            if kf.flag_frame not in (-1, 9):
-                raise UnexpectedValueException("flag_frame = " + str(kf.flag_frame))
-
-            if kf.master_key_frame not in (0, 1):
-                raise UnexpectedValueException("master_key_frame = " + str(kf.master_key_frame))
-            if kf.key_frame not in (0, 1):
-                raise UnexpectedValueException("key_frame = " + str(kf.key_frame))
-            if kf.key_move not in (0, 1):
-                raise UnexpectedValueException("key_move = " + str(kf.key_move))
-            if kf.key_orient not in (0, 1):
-                raise UnexpectedValueException("key_orient = " + str(kf.key_orient))
-            if kf.key_morph not in (0, 1):
-                raise UnexpectedValueException("key_morph = " + str(kf.key_morph))
-
-            duration = kf.num_frame
+            self.log.debug("Keyframe %d: raw time_frame=%d", i, kf.time_frame)
+            duration = kf.time_frame / 1000.0 if kf.time_frame > 0 else 41.67  # Assume microseconds, fallback 24 FPS
             flags = kf.flag_frame
+            if flags not in (-1, 9):
+                raise UnexpectedValueException("flag_frame = " + str(flags))
 
-            # Global translation
             translation = None
             if kf.key_move != 0:
                 translation = SavedVec3.from_buffer_copy(data, pos)
                 pos += sizeof(SavedVec3)
 
-            # Global rotation
             rotation = None
             if kf.key_orient != 0:
-                pos += 8;  # skip THEO_ANGLE
+                pos += 8  # skip THEO_ANGLE
                 rotation = ArxQuat.from_buffer_copy(data, pos)
                 pos += sizeof(ArxQuat)
 
-            # Global Morph
             if kf.key_morph != 0:
                 morph = THEA_MORPH.from_buffer_copy(data, pos)
                 pos += sizeof(THEA_MORPH)
 
-                if morph.unknown1 != -1:
-                    raise UnexpectedValueException("unknown1 = " + str(morph.unknown1))
-                if morph.unknown2 != -1:
-                    raise UnexpectedValueException("unknown2 = " + str(morph.unknown2))
-
-                self.log.debug("Frame {0} Morph: {1} {2}".format(i, morph.unknown3, morph.unknown4))
-                # pos += 16; # skip THEA_MORPH
-
-            # Now go for Group Rotations/Translations/scaling for each GROUP
-            groupsList = THEO_GROUPANIM * header.nb_groups
-            groups = groupsList.from_buffer_copy(data, pos)
+            groupsList = (THEO_GROUPANIM * header.nb_groups).from_buffer_copy(data, pos)
             pos += sizeof(groupsList)
 
-            # Has a sound sample ?
             num_sample = c_int32.from_buffer_copy(data, pos)
             pos += sizeof(c_int32)
 
@@ -207,38 +181,18 @@ class TeaSerializer(object):
             if num_sample.value != -1:
                 sample = THEA_SAMPLE.from_buffer_copy(data, pos)
                 pos += sizeof(THEA_SAMPLE)
-
-                sampleName = sample.sample_name.decode('iso-8859-1');
-
-                self.log.debug("sample_size: {0}".format(sample.sample_size))
-                pos += sample.sample_size  # skip data
+                sampleName = sample.sample_name.decode('iso-8859-1')
+                pos += sample.sample_size
 
             pos += 4  # skip num_sfx
-            # self.log.debug("Pos: {0}".format(pos))
             results.append(TeaFrame(
                 duration=duration,
                 flags=flags,
                 translation=translation,
                 rotation=rotation,
-                groups=groups,
+                groups=groupsList,
                 sampleName=sampleName
             ))
 
-        # Sanity check the deserialized data
-        first = True
-        grouplen = 0
-        for f in results:
-            if first:
-                grouplen = len(f.groups)
-                first = False
-            else:
-                if grouplen != len(f.groups):
-                    raise UnexpectedValueException("Group count does not match!")
-
-            for g in f.groups:
-                if g.key_group not in (0, 1):
-                    raise UnexpectedValueException("key_group = {}".format(g.key_group))
-
-        self.log.debug("File loaded")
-
+        self.log.debug("File loaded with %d frames", len(results))
         return results
