@@ -29,7 +29,6 @@ from .files import splitPath
 from .dataFtl import FtlMetadata, FtlVertex, FtlFace, FtlGroup, FtlSelection, FtlAction, FtlData, FtlSerializer
 
 logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger(__name__)
 
 class ArxObjectManager(object):
     def __init__(self, ioLib, dataPath):
@@ -40,13 +39,13 @@ class ArxObjectManager(object):
 
     def validateAssetDirectory(self):
         if not os.path.isdir(self.dataPath):
-            raise ArxException("Arx assert directory path [" + self.dataPath + "] is not a directory")
+            raise ArxException(f"Arx asset directory path [{self.dataPath}] is not a directory")
         if not os.path.exists(self.dataPath):
-            raise ArxException("Arx assert directory path [" + self.dataPath + "] does not exist")
+            raise ArxException(f"Arx asset directory path [{self.dataPath}] does not exist")
 
     def validateObjectName(self, name):
         if len(name.encode('utf-8')) > 63:
-            raise ArxException("Name ["+name+"] too long to be used as blender object name")
+            raise ArxException(f"Name [{name}] too long to be used as blender object name")
 
     def analyzeFaceData(self, faceData):
         facesToDrop = []
@@ -58,8 +57,8 @@ class ArxObjectManager(object):
                     facesToDrop.append(seen)
                     break
             seenFaceVerts[face.vids] = i
-        if len(facesToDrop) > 0:
-            self.log.debug("Dropping faces: " + str(facesToDrop))
+        if facesToDrop:
+            self.log.debug("Dropping faces: %s", facesToDrop)
         return facesToDrop
 
     def createBmesh(self, context, vertData, faceData) -> bmesh.types.BMesh:
@@ -68,7 +67,7 @@ class ArxObjectManager(object):
         arxFaceType = bm.faces.layers.int.new('arx_facetype')
         arxTransVal = bm.faces.layers.float.new('arx_transval')
         uvData = bm.loops.layers.uv.verify()
-        scale_factor = 0.1  # Normalize model size to Blender units
+        scale_factor = 0.1
         for i, v in enumerate(vertData):
             vertex = bm.verts.new(arx_pos_to_blender_for_model(v.xyz) * scale_factor)
             vertex.normal = v.n
@@ -84,15 +83,12 @@ class ArxObjectManager(object):
             except ValueError:
                 self.log.debug("Extra face")
             face.normal = Vector(f.normal)
-            if f.texid >= 0:
-                face.material_index = f.texid  # Set material index for face
-            else:
-                face.material_index = 0  # Default to first material
+            face.material_index = max(f.texid, 0)
             face[arxFaceType] = f.facetype
             face[arxTransVal] = f.transval
             for j, loop in enumerate(face.loops):
                 u, v = f.uvs[j]
-                loop[uvData].uv = u, 1.0 - v
+                loop[uvData].uv = (u, 1.0 - v)
         bm.faces.ensure_lookup_table()
         bm.edges.index_update()
         bm.edges.ensure_lookup_table()
@@ -106,37 +102,26 @@ class ArxObjectManager(object):
         amtobject.location = (0, 0, 0)
         bpy.context.scene.collection.objects.link(amtobject)
         bpy.context.view_layer.objects.active = amtobject
-        amtobject.select_set(True)
         bpy.ops.object.mode_set(mode='EDIT')
         edit_bones = amt.edit_bones
-        scale_factor = 1  # Match model scale
-        edit_bones_array = []  # Store bones for parenting
-        
-        # First pass: Create all bones with proper positioning
+        edit_bones_array = []
+        scale_factor = 1
         for i, group in enumerate(groups):
-            bGrpName = "grp:" + str(i).zfill(2) + ":" + group.name
+            bGrpName = f"grp:{i:02d}:{group.name}"
             bone = edit_bones.new(bGrpName)
-            
-            # Set bone head
             if group.origin >= 0 and group.origin < len(bm.verts):
                 bone.head = bm.verts[group.origin].co * scale_factor
             else:
                 self.log.warning("Invalid origin index %d for group '%s', using (0,0,0)", group.origin, bGrpName)
                 bone.head = Vector((0, 0, 0))
-            
-            # Set bone tail with improved logic
             tail_set = False
             children = [j for j, child_group in enumerate(groups) if child_group.parentIndex == i]
-            
             if children:
-                # Point towards first child
                 child_group = groups[children[0]]
                 if child_group.origin >= 0 and child_group.origin < len(bm.verts):
                     bone.tail = bm.verts[child_group.origin].co * scale_factor
                     tail_set = True
-            
             if not tail_set:
-                # For leaf bones, use parent direction or default to local bone orientation
                 if group.parentIndex >= 0 and group.parentIndex < len(groups):
                     parent_group = groups[group.parentIndex]
                     if parent_group.origin >= 0 and parent_group.origin < len(bm.verts):
@@ -145,28 +130,25 @@ class ArxObjectManager(object):
                         if direction.length > 0.001:
                             bone.tail = bone.head + direction.normalized() * (0.1 * scale_factor)
                         else:
-                            bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))  # Z-axis fallback
+                            bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))
                     else:
                         bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))
                 else:
-                    # Root bone: Use group’s default orientation if available
                     bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))
-            
-            # Ensure non-zero length
             if (bone.tail - bone.head).length < 0.001 * scale_factor:
                 bone.tail = bone.head + Vector((0, 0, 0.1 * scale_factor))
-            
             bone["OriginVertex"] = group.origin
+            bone["ParentIndex"] = group.parentIndex
+            if group.origin >= 0 and group.origin < len(bm.verts):
+                orig_pos = bm.verts[group.origin].co.copy()
+                bone["OriginVertexPos"] = [orig_pos.x, orig_pos.y, orig_pos.z]
             edit_bones_array.append(bone)
             self.log.debug("Created bone '%s' at head=%s, tail=%s", bGrpName, bone.head, bone.tail)
-        
-        # Second pass: Set hierarchical parenting
         for i, group in enumerate(groups):
             if group.parentIndex >= 0 and group.parentIndex < len(groups):
                 bone = edit_bones_array[i]
                 bone.parent = edit_bones_array[group.parentIndex]
                 self.log.debug("Set parent of bone '%s' to '%s'", bone.name, edit_bones_array[group.parentIndex].name)
-        
         bpy.ops.object.mode_set(mode='OBJECT')
         return amtobject
 
@@ -182,30 +164,25 @@ class ArxObjectManager(object):
         obj = bpy.data.objects.new(name=mesh.name, object_data=mesh)
         obj['arx.ftl.name'] = data.metadata.name
         obj['arx.ftl.org'] = data.metadata.org
-        # Link mesh to collection first
         collection.objects.link(obj)
-        # Assign exclusive weights to vertex groups, prioritizing smaller groups
         vertex_to_group = {}
-        # Iterate groups in reverse to prioritize smaller, discrete groups
         for i in reversed(range(len(data.groups))):
             group = data.groups[i]
-            grp = obj.vertex_groups.new(name="grp:" + str(i).zfill(2) + ":" + group.name)
-            if not group.indices or len(group.indices) == 0:
+            grp = obj.vertex_groups.new(name=f"grp:{i:02d}:{group.name}")
+            if not group.indices:
                 self.log.warning("Vertex group '%s' is empty, no vertices assigned", grp.name)
                 continue
             valid_indices = [v for v in group.indices if v >= 0 and v < len(mesh.vertices)]
             if len(valid_indices) < len(group.indices):
                 self.log.warning("Group '%s' has %d invalid vertex indices", grp.name, len(group.indices) - len(valid_indices))
             for v in valid_indices:
-                # Assign vertex to the first group it appears in (later groups take precedence)
                 if v not in vertex_to_group:
                     vertex_to_group[v] = grp
                     self.log.debug("Assigned vertex %d to group '%s' with weight 1.0", v, grp.name)
-        # Apply weights to vertex groups
         for v, grp in vertex_to_group.items():
             grp.add([v], 1.0, 'REPLACE')
         for i, s in enumerate(data.sels):
-            grp = obj.vertex_groups.new(name="sel:" + str(i).zfill(2) + ":" + s.name)
+            grp = obj.vertex_groups.new(name=f"sel:{i:02d}:{s.name}")
             valid_indices = [v for v in s.indices if v >= 0 and v < len(mesh.vertices)]
             if valid_indices:
                 grp.add(valid_indices, 1.0, 'REPLACE')
@@ -224,38 +201,46 @@ class ArxObjectManager(object):
                 action.lock_scale = [True, True, True]
             else:
                 action.scale = [3, 3, 3]
-        # Bind armature to mesh
+        for i, group in enumerate(data.groups):
+            if group.origin >= 0 and group.origin < len(mesh.vertices):
+                empty_name = f"origin:{i:02d}:{group.name}"
+                empty = bpy.data.objects.new(empty_name, None)
+                empty.empty_display_type = 'PLAIN_AXES'
+                empty.empty_display_size = 0.05
+                empty.parent = obj
+                empty.parent_type = 'VERTEX'
+                empty.parent_vertices = [group.origin, 0, 0]
+                empty.show_name = True
+                collection.objects.link(empty)
+                self.log.debug("Created origin empty '%s' at vertex %d", empty_name, group.origin)
         armatureModifier = obj.modifiers.new(type='ARMATURE', name="Skeleton")
         armatureModifier.object = armatureObj
-        # Assign materials to mesh
         for m in data.mats:
             mat = createMaterial(self.dataPath, m)
             obj.data.materials.append(mat)
-        # Make armature a child of the mesh
         armatureObj.parent = obj
-        # Link armature to collection and update scene
         collection.objects.link(armatureObj)
         bpy.context.view_layer.update()
         return obj
 
     def loadFile_data(self, filePath) -> FtlData:
         self.validateAssetDirectory()
-        self.log.debug("Loading file: %s" % filePath)
+        self.log.debug("Loading file: %s", filePath)
         with open(filePath, "rb") as f:
             data = f.read()
             if data[:3] == b"FTL":
                 unpacked = data
-                self.log.debug("Loaded %i unpacked bytes from file %s" % (len(data), filePath))
+                self.log.debug("Loaded %i unpacked bytes from file %s", len(data), filePath)
             else:
                 unpacked = self.ioLib.unpack(data)
                 with open(filePath + ".unpack", "wb") as f:
                     f.write(unpacked)
                     self.log.debug("Written unpacked ftl")
-                self.log.debug("Loaded %i packed bytes from file %s" % (len(data), filePath))
+                self.log.debug("Loaded %i packed bytes from file %s", len(data), filePath)
         ftlData = self.ftlSerializer.read(unpacked)
         for i, group in enumerate(ftlData.groups):
             father = self.getFatherIndex(ftlData.groups, i)
-            self.log.debug("group %d with father %d" % (i, father))
+            self.log.debug("group %d with father %d", i, father)
             group.parentIndex = father
         return ftlData
 
@@ -279,7 +264,7 @@ class ArxObjectManager(object):
                 parent_collection.children.link(col)
                 parent_collection = col
         object_id_string = "/".join(canonicalId)
-        self.log.debug("Canonical ID: %s" % object_id_string)
+        self.log.debug("Canonical ID: %s", object_id_string)
         bm = self.createBmesh(context, ftlData.verts, ftlData.faces)
         obj = self.createObject(context, bm, ftlData, canonicalId, parent_collection)
         if import_tweaks:
@@ -296,110 +281,123 @@ class ArxObjectManager(object):
                     tweak_obj.parent = obj
         return obj
 
-    def toFtlData(self, obj) -> FtlData:
-
-        #objs = [o for o in bpy.data.objects if o.type == 'MESH' and not o.hide]
-
-        #if not objs:
-        #    self.log.info("Nothing to export")
-
-        #obj = objs[0]
-
+    def updateArmatureOrigins(self, obj, verts, scale_factor):
         canonicalId = obj.name.split("/")
-        self.log.debug("Exporting Canonical Id: %s" % str(canonicalId))
+        armature_name = "/".join(canonicalId) + "-amt"
+        armature_obj = bpy.data.objects.get(armature_name)
+        if not armature_obj or armature_obj.type != 'ARMATURE':
+            return
+        armature = armature_obj.data
+        bones_to_update = []
+        for bone in armature.bones:
+            if "OriginVertex" in bone:
+                origin_idx = bone["OriginVertex"]
+                if 0 <= origin_idx < len(verts):
+                    current_vert_pos = Vector(arx_pos_to_blender_for_model(verts[origin_idx].xyz)) * scale_factor
+                    bone_head_pos = bone.head_local
+                    if (current_vert_pos - bone_head_pos).length > 0.001:
+                        bones_to_update.append((bone.name, current_vert_pos, origin_idx))
+        if bones_to_update:
+            original_active = bpy.context.view_layer.objects.active
+            original_mode = bpy.context.mode
+            try:
+                bpy.context.view_layer.objects.active = armature_obj
+                bpy.ops.object.mode_set(mode='EDIT')
+                for bone_name, new_pos, vertex_idx in bones_to_update:
+                    edit_bone = armature.edit_bones[bone_name]
+                    old_head = edit_bone.head.copy()
+                    old_tail = edit_bone.tail.copy()
+                    edit_bone.head = new_pos
+                    bone_vector = old_tail - old_head
+                    edit_bone.tail = new_pos + bone_vector
+                    self.log.info("Updated bone '%s' head: %s -> %s (vertex %d)", 
+                                bone_name, old_head, new_pos, vertex_idx)
+            finally:
+                bpy.ops.object.mode_set(mode='OBJECT')
+                if original_active:
+                    bpy.context.view_layer.objects.active = original_active
+                if original_mode != 'OBJECT':
+                    try:
+                        bpy.ops.object.mode_set(mode=original_mode)
+                    except:
+                        pass
 
-        # obj.update_from_editmode()
-
-        bm = bmesh.new()
-        bm.from_mesh(obj.data)
-        bm.normal_update()
-
+    def validate_mesh(self, obj, bm):
+        """Validate mesh properties and custom data layers."""
+        if obj is None or obj.type != 'MESH':
+            self.log.error("No valid mesh object provided")
+            raise ArxException("No active mesh object to export")
+        if not (math.isclose(obj.location[0], 0.0) and math.isclose(obj.location[1], 0.0) and math.isclose(obj.location[2], 0.0)):
+            self.log.error("Object has non-zero location: %s", obj.location)
+            raise ArxException("Object is moved, please apply the location to the vertex positions")
+        if not (math.isclose(obj.rotation_euler[0], 0.0) and math.isclose(obj.rotation_euler[1], 0.0) and math.isclose(obj.rotation_euler[2], 0.0)):
+            self.log.error("Object has non-zero rotation: %s", obj.rotation_euler)
+            raise ArxException("Object is rotated, please apply the rotation to the vertex positions")
+        if not (math.isclose(obj.scale[0], 1.0) and math.isclose(obj.scale[1], 1.0) and math.isclose(obj.scale[2], 1.0)):
+            self.log.error("Object has non-unit scale: %s", obj.scale)
+            raise ArxException("Object is scaled, please apply the scale to the vertex positions")
         arxFaceType = bm.faces.layers.int.get('arx_facetype')
         if not arxFaceType:
-            raise ArxException("Mesh is missing arx specific data layer: " + 'arx_facetype')
-        
+            self.log.error("Missing arx_facetype layer")
+            raise ArxException("Mesh is missing arx specific data layer: arx_facetype")
         arxTransVal = bm.faces.layers.float.get('arx_transval')
         if not arxTransVal:
-            raise ArxException("Mesh is missing arx specific data layer: " + 'arx_transval')
-        
-        if not (math.isclose(obj.location[0], 0.0) and math.isclose(obj.location[1], 0.0) and math.isclose(obj.location[2], 0.0)):
-            raise ArxException("Object is moved, please apply the location to the vertex positions")
-        
-        if not (math.isclose(obj.rotation_euler[0], 0.0) and math.isclose(obj.rotation_euler[1], 0.0) and math.isclose(obj.rotation_euler[2], 0.0)):
-            raise ArxException("Object is rotated, please apply the rotation to the vertex positions")
-        
-        if not (math.isclose(obj.scale[0], 1.0) and math.isclose(obj.scale[1], 1.0) and math.isclose(obj.scale[2], 1.0)):
-            raise ArxException("Object is scaled, please apply the scale to the vertex positions")
-        
-
+            self.log.error("Missing arx_transval layer")
+            raise ArxException("Mesh is missing arx specific data layer: arx_transval")
         for f in bm.faces:
             if len(f.loops) > 3:
+                self.log.error("Found face with %d vertices", len(f.loops))
                 raise ArxException("Face with more than 3 vertices found")
-
         for o in bpy.data.objects:
             for ms in o.material_slots:
-                if not ms.material.name.endswith('-mat'):
-                    raise ArxException("Material slot names must end with: " + '-mat')
-                    
-        
-        # Validate child empties representing action points
+                if ms.material and not ms.material.name.endswith('-mat'):
+                    self.log.error("Material %s does not end with -mat", ms.material.name)
+                    raise ArxException("Material slot names must end with: -mat")
+
+    def validate_child_empties(self, obj):
+        """Validate child empty objects."""
         for child in bpy.data.objects:
             if child.type == 'EMPTY' and child.parent == obj:
                 nameParts = child.name.split(".")
                 name = nameParts[0].lower()
-                print(nameParts)
-                if name.startswith("hit_"):
-                    pass
-                elif name == "view_attach":
-                    pass
-                elif name == "primary_attach":
-                    pass
-                elif name == "left_attach":
-                    pass
-                elif name == "weapon_attach":
-                    pass
-                elif name == "secondary_attach":
-                    pass
-                elif name == "fire":
-                    pass
-                else:
-                    self.log.warn("Unexpected child empty: {}".format(nameParts))
-                    
-        
-        # TODO validate the mesh
+                if name not in ("hit_", "view_attach", "primary_attach", "left_attach", "weapon_attach", "secondary_attach", "fire") and not name.startswith("origin:"):
+                    self.log.warning("Unexpected child empty: %s", nameParts)
 
+    def create_vertices(self, bm, scale_factor=0.1):
+        """Create FtlVertex objects from BMesh vertices."""
         verts = []
-        
-        # First add all mesh vertices
-        # Reverse the 0.1 scale factor that was applied during import
-        scale_factor = 0.1
-        for v in bm.verts:
-            vertexNormals = [sc.normal for sc in bm.verts if sc.co == v.co]
+        bmesh_to_verts = {}
+        for i, v in enumerate(bm.verts):
+            vertexNormals = [sc.normal for sc in bm.verts if (sc.co - v.co).length < 1e-6]
             normal = Vector((0.0, 0.0, 0.0))
             for n in vertexNormals:
-                normal += v.normal
+                normal += n
             normal.normalize()
-            # Scale vertex coordinates back up to original Arx size
             scaled_co = [coord / scale_factor for coord in v.co[:]]
             verts.append(FtlVertex(
-                blender_pos_to_arx(scaled_co),
-                blender_pos_to_arx(normal)
+                xyz=blender_pos_to_arx(scaled_co),
+                n=blender_pos_to_arx(normal)
             ))
-        
+            bmesh_to_verts[v] = i
+        return verts, bmesh_to_verts
+
+    def create_metadata(self, obj, verts):
+        """Create FtlMetadata with origin vertex."""
         originVertexIndex = -1
         for index, vert in enumerate(verts):
-            if vert.xyz == (0.0, 0.0, 0.0):
-                #self.log.info("Origin vertex found at index {}".format(index))
+            if math.isclose(vert.xyz[0], 0.0, abs_tol=1e-6) and \
+               math.isclose(vert.xyz[1], 0.0, abs_tol=1e-6) and \
+               math.isclose(vert.xyz[2], 0.0, abs_tol=1e-6):
                 originVertexIndex = index
-        
+                self.log.debug("Found origin vertex at index %d", index)
         if originVertexIndex == -1:
             self.log.info("Origin vertex not found, adding new one")
             originVertexIndex = len(verts)
             verts.append(FtlVertex((0.0, 0.0, 0.0), (0.0, 0.0, 0.0)))
-        
-        metadata = FtlMetadata(name=obj.get('arx.ftl.name', ''), org=originVertexIndex)
-        
-        # Add action point vertices
+        return FtlMetadata(name=obj.get('arx.ftl.name', ''), org=originVertexIndex), verts
+
+    def create_actions(self, obj, verts, scale_factor=0.1):
+        """Create FtlAction objects from empty objects."""
         actions = []
         for o in bpy.data.objects:
             if o.type == 'EMPTY' and o.parent == obj:
@@ -407,103 +405,234 @@ class ArxObjectManager(object):
                 name = nameParts[0]
                 if o.parent_type == 'VERTEX':
                     actionVertexIndex = o.parent_vertices[0]
-                    actions.append(FtlAction(name, actionVertexIndex))
+                    if 0 <= actionVertexIndex < len(obj.data.vertices):
+                        actions.append(FtlAction(name, actionVertexIndex))
+                    else:
+                        self.log.warning("Invalid vertex index %d for empty '%s', skipping", actionVertexIndex, name)
                 elif o.parent_type == 'OBJECT':
                     actionVertexIndex = len(verts)
-                    # Scale action point coordinates back up to original Arx size
                     scaled_location = [coord / scale_factor for coord in o.location]
                     verts.append(FtlVertex(tuple(scaled_location), (0.0, 0.0, 0.0)))
                     actions.append(FtlAction(name, actionVertexIndex))
                 else:
-                    self.log.warn("Unhandled empty parent type {}".format(o.parent_type))
+                    self.log.warning("Unhandled empty parent type %s for '%s'", o.parent_type, name)
+        return actions, verts
 
+    def find_vertex_index(self, coord, allXYZ, tolerance=1e-6):
+        """Find vertex index with floating-point tolerance."""
+        for i, xyz in enumerate(allXYZ):
+            if (math.isclose(coord[0], xyz[0], abs_tol=tolerance) and
+                math.isclose(coord[1], xyz[1], abs_tol=tolerance) and
+                math.isclose(coord[2], xyz[2], abs_tol=tolerance)):
+                return i
+        self.log.error("Vertex %s not found in vertex list", coord)
+        raise ValueError(f"Vertex {coord} not found in vertex list")
+
+    def create_faces(self, bm, verts, scale_factor=0.1):
+        """Create FtlFace objects from BMesh faces."""
         uvData = bm.loops.layers.uv.verify()
-
+        arxFaceType = bm.faces.layers.int['arx_facetype']
+        arxTransVal = bm.faces.layers.float['arx_transval']
         allXYZ = [v.xyz for v in verts]
         faces = []
-
         for f in bm.faces:
             vertexIndices = []
             vertexUvs = []
             vertexNormals = []
             for c in f.loops:
-                # Apply the same scaling as used for vertex creation to match allXYZ
                 scaled_co = [coord / scale_factor for coord in c.vert.co[:]]
-                vertexIndices.append(allXYZ.index(blender_pos_to_arx(scaled_co)))
+                vertexIndices.append(self.find_vertex_index(blender_pos_to_arx(scaled_co), allXYZ))
                 vertexUvs.append((c[uvData].uv[0], 1 - c[uvData].uv[1]))
                 vertexNormals.append((c.vert.normal[0], c.vert.normal[1], c.vert.normal[2]))
-            mat = f.material_index
-
-            faceType = f[arxFaceType]
-            transval = f[arxTransVal]
-
             faces.append(FtlFace(
                 vids=tuple(vertexIndices),
                 uvs=vertexUvs,
-                texid=mat,
-                facetype=faceType,
-                transval=transval,
+                texid=f.material_index,
+                facetype=f[arxFaceType],
+                transval=f[arxTransVal],
                 normal=vertexNormals
             ))
+        return faces
 
+
+    def create_groups_and_selections(self, obj, bm, bmesh_to_verts):
+        """Create FtlGroup and FtlSelection objects from vertex groups."""
         grps = []
         sels = []
-
         dvert_lay = bm.verts.layers.deform.active
-
+        if not dvert_lay:
+            self.log.warning("No deform layer found, groups will be empty")
+            return grps, sels
+        armature = None
+        for modifier in obj.modifiers:
+            if modifier.type == 'ARMATURE' and modifier.object:
+                armature = modifier.object.data
+                break
+        vertex_to_groups = {}  # Map vertex index to list of group indices
+        for vert in bm.verts:
+            vertex_to_groups[bmesh_to_verts[vert]] = []
         for grp in obj.vertex_groups:
             v = []
-            if dvert_lay is not None:
-                for vert in bm.verts:
-                    dvert = vert[dvert_lay]
-                    if grp.index in dvert:
-                        v.append(vert.index)
-
+            for vert in bm.verts:
+                dvert = vert[dvert_lay]
+                if grp.index in dvert:
+                    v.append(bmesh_to_verts[vert])
+                    vertex_to_groups[bmesh_to_verts[vert]].append(grp.index)
             s = grp.name.split(":")
             if s[0] == "grp":
-                armature = bpy.data.armatures.get("/".join(canonicalId))
-                if armature:
-                    origin = armature.bones[grp.name]["OriginVertex"]
+                group_index = int(s[1])
+                group_name = s[2]
+                origin_empty_name = f"origin:{group_index:02d}:{group_name}"
+                origin_empty = bpy.data.objects.get(origin_empty_name)
+                origin = 0
+                if origin_empty and origin_empty.parent == obj and origin_empty.parent_type == 'VERTEX':
+                    origin_vertex_index = origin_empty.parent_vertices[0]
+                    if 0 <= origin_vertex_index < len(bm.verts):
+                        origin = bmesh_to_verts[bm.verts[origin_vertex_index]]
+                    else:
+                        origin = v[0] if v else 0
+                        self.log.warning("Origin empty for group '%s' points to invalid vertex %d, using %d", 
+                                       grp.name, origin_vertex_index, origin)
                 else:
-                    # TODO hardcoded use of mesh vertex at index 0
-                    origin = 0
-                
-                # TODO get the real data from armature
+                    # Choose origin from vertices that are also in the parent group
+                    parentIndex = -1
+                    if armature:
+                        bone_name = f"grp:{group_index:02d}:{group_name}"
+                        if bone_name in armature.bones:
+                            bone = armature.bones[bone_name]
+                            if bone.parent and bone.parent.name.startswith("grp:"):
+                                parent_parts = bone.parent.name.split(":")
+                                parent_index = int(parent_parts[1])
+                                parentIndex = parent_index
+                    if parentIndex != -1:
+                        for vert in v:
+                            vert_groups = vertex_to_groups[vert]
+                            parent_group = [g for g in grps if g.sortIndex == parentIndex]
+                            if parent_group and vert in parent_group[0].indices:
+                                origin = vert
+                                break
+                        if origin == 0:
+                            origin = v[0] if v else 0
+                            self.log.warning("No suitable origin found for group '%s', using %d", group_name, origin)
+                    else:
+                        origin = v[0] if v else 0
+                        self.log.warning("No origin empty or parent for group '%s', using %d", group_name, origin)
                 parentIndex = -1
-                grps.append(FtlGroup(s[2], origin, v, parentIndex))
+                if armature:
+                    bone_name = f"grp:{group_index:02d}:{group_name}"
+                    if bone_name in armature.bones:
+                        bone = armature.bones[bone_name]
+                        if bone.parent and bone.parent.name.startswith("grp:"):
+                            parent_parts = bone.parent.name.split(":")
+                            parent_index = int(parent_parts[1])
+                            parentIndex = parent_index
+                ftl_group = FtlGroup(s[2], origin, v, parentIndex)
+                ftl_group.sortIndex = group_index
+                grps.append(ftl_group)
+                self.log.debug("Added FTL group '%s' (index %d): origin=%d, parent=%d, indices=%s", 
+                             s[2], group_index, origin, parentIndex, v)
             else:
                 sels.append(FtlSelection(s[2], v))
+                self.log.debug("Added FTL selection '%s': indices=%s", s[2], v)
+        
+        # Propagate child origins to parent indices
+        for group in grps:
+            group_index = group.sortIndex
+            bone_name = f"grp:{group_index:02d}:{group.name}"
+            if armature and bone_name in armature.bones:
+                bone = armature.bones[bone_name]
+                # Find all child bones
+                for child_bone in armature.bones:
+                    if child_bone.parent == bone and child_bone.name.startswith("grp:"):
+                        child_parts = child_bone.name.split(":")
+                        child_index = int(child_parts[1])
+                        child_group = [g for g in grps if g.sortIndex == child_index]
+                        if child_group:
+                            child_origin = child_group[0].origin
+                            if child_origin not in group.indices:
+                                group.indices.append(child_origin)
+                                self.log.debug("Added child origin %d to group '%s' (index %d) for child '%s' (index %d)", 
+                                             child_origin, group.name, group_index, child_group[0].name, child_index)
+        
+        return grps, sels
 
+    def buildHierarchicalOrder(self, grps, armature):
+        """Sort groups to match original FTL order and ensure getFatherIndex compatibility."""
+        self.log.debug("Starting buildHierarchicalOrder with %d groups", len(grps))
+        if not armature:
+            self.log.warning("No armature found, sorting groups by sortIndex")
+            return sorted(grps, key=lambda g: g.sortIndex)
+        
+        ordered_groups = sorted(grps, key=lambda g: g.sortIndex)
+        
+        self.log.debug("Ordered groups: %s", [g.name for g in ordered_groups])
+        self.log.debug("Parent indices: %s", [g.parentIndex for g in ordered_groups])
+        return ordered_groups
+
+    def create_material_names(self):
+        """Create material names for FtlData."""
         matNames = []
         for o in bpy.data.objects:
             for ms in o.material_slots:
-                mat = ms.material
-                # strip -mat suffix and decorate with bullshit
-                matNames.append('GRAPH\\OBJ3D\\TEXTURES\\' + mat.name[:-4] + ".FOO")
+                if ms.material:
+                    matNames.append(f'GRAPH\\OBJ3D\\TEXTURES\\{ms.material.name[:-4]}.FOO')
+        return matNames
 
-        bm.free()
-
-        return FtlData(
-            metadata=metadata,
-            verts=verts,
-            faces=faces,
-            mats=matNames,
-            groups=grps,
-            actions=actions,
-            sels=sels
-        )
+    def toFtlData(self, obj) -> FtlData:
+        """Convert Blender object to FtlData."""
+        self.log.debug("Starting toFtlData for object: %s", obj.name)
+        canonicalId = obj.name.split("/")
+        self.log.debug("Exporting Canonical Id: %s", canonicalId)
+        
+        bm = bmesh.new()
+        try:
+            bm.from_mesh(obj.data)
+            bm.normal_update()
+            bm.verts.ensure_lookup_table()
+            bm.edges.ensure_lookup_table()
+            bm.faces.ensure_lookup_table()
+            
+            self.validate_mesh(obj, bm)
+            self.validate_child_empties(obj)
+            
+            verts, bmesh_to_verts = self.create_vertices(bm)
+            metadata, verts = self.create_metadata(obj, verts)
+            actions, verts = self.create_actions(obj, verts)
+            faces = self.create_faces(bm, verts)
+            grps, sels = self.create_groups_and_selections(obj, bm, bmesh_to_verts)
+            
+            armature = None
+            for modifier in obj.modifiers:
+                if modifier.type == 'ARMATURE' and modifier.object:
+                    armature = modifier.object.data
+                    break
+            grps = self.buildHierarchicalOrder(grps, armature)
+            
+            matNames = self.create_material_names()
+            
+            self.log.debug("Final FTL data: %d vertices, %d faces, %d groups, %d selections", 
+                         len(verts), len(faces), len(grps), len(sels))
+            self.log.debug("Group order: %s", [g.name for g in grps])
+            self.log.debug("Parent indices: %s", [g.parentIndex for g in grps])
+            
+            return FtlData(
+                metadata=metadata,
+                verts=verts,
+                faces=faces,
+                mats=matNames,
+                groups=grps,
+                actions=actions,
+                sels=sels
+            )
+        finally:
+            bm.free()
 
     def saveFile(self, path):
-        # Get the active object from the current scene
         obj = bpy.context.active_object
         if obj is None or obj.type != 'MESH':
             raise ArxException("No active mesh object to export")
-
         data = self.toFtlData(obj)
-
         binData = self.ftlSerializer.write(data)
-
         with open(path, 'wb') as f:
             f.write(binData)
-
-        self.log.debug("Written %i bytes to file %s" % (len(binData), path))
+        self.log.debug("Written %i bytes to file %s", len(binData), path)

@@ -110,7 +110,10 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
-TeaFrame = namedtuple("TeaFrame", ['duration', 'flags', 'translation', 'rotation', 'groups', 'sampleName'])
+TeaFrame = namedtuple("TeaFrame", [
+    'duration', 'flags', 'translation', 'rotation', 'groups', 'sampleName',
+    'key_move', 'key_orient', 'key_morph', 'master_key_frame', 'key_frame', 'info_frame'
+])
 
 class TeaSerializer(object):
     def __init__(self):
@@ -121,9 +124,16 @@ class TeaSerializer(object):
         data = f.read()
         f.close()
         self.log.debug("Read %i bytes from file %s", len(data), fileName)
+        
+        # Basic file size validation
+        if len(data) < sizeof(THEA_HEADER):
+            raise SerializationException(f"File too small ({len(data)} bytes), need at least {sizeof(THEA_HEADER)} for header")
 
         pos = 0
-        header = THEA_HEADER.from_buffer_copy(data, pos)
+        try:
+            header = THEA_HEADER.from_buffer_copy(data, pos)
+        except Exception as e:
+            raise SerializationException(f"Failed to read TEA header: {str(e)}")
         pos += sizeof(THEA_HEADER)
 
         self.log.debug("Header: Frames=%d, KeyFrames=%d", header.nb_frames, header.nb_key_frames)
@@ -131,54 +141,90 @@ class TeaSerializer(object):
             "Header - Identity: {0}; Version: {1}; Frames: {2}; Groups {3}; KeyFrames {4}".format(
                 header.identity, header.version, header.nb_frames, header.nb_groups, header.nb_key_frames))
 
-        if header.nb_frames < 0:
-            raise UnexpectedValueException("header.nb_frames = " + str(header.nb_frames))
-        if header.nb_groups < 0:
-            raise UnexpectedValueException("header.nb_groups = " + str(header.nb_groups))
-        if header.nb_key_frames < 0:
-            raise UnexpectedValueException("header.nb_key_frames = " + str(header.nb_key_frames))
+        # Validate header values for reasonable bounds
+        if header.nb_frames < 0 or header.nb_frames > 100000:
+            raise UnexpectedValueException(f"Invalid header.nb_frames = {header.nb_frames} (should be 0-100000)")
+        if header.nb_groups < 0 or header.nb_groups > 1000:
+            raise UnexpectedValueException(f"Invalid header.nb_groups = {header.nb_groups} (should be 0-1000)")
+        if header.nb_key_frames < 0 or header.nb_key_frames > 10000:
+            raise UnexpectedValueException(f"Invalid header.nb_key_frames = {header.nb_key_frames} (should be 0-10000)")
 
         results = []
         default_frame_rate = 24.0  # Configurable default
         for i in range(header.nb_key_frames):
+            # Check if we have enough data left for keyframe structure
             if header.version == 2014:
-                kf = THEA_KEYFRAME_2014.from_buffer_copy(data, pos)
+                if pos + sizeof(THEA_KEYFRAME_2014) > len(data):
+                    raise SerializationException(f"File truncated at keyframe {i}, need {sizeof(THEA_KEYFRAME_2014)} bytes but only {len(data) - pos} left")
+                try:
+                    kf = THEA_KEYFRAME_2014.from_buffer_copy(data, pos)
+                except Exception as e:
+                    raise SerializationException(f"Failed to read keyframe {i} (2014): {str(e)}")
                 pos += sizeof(THEA_KEYFRAME_2014)
             elif header.version == 2015:
-                kf = THEA_KEYFRAME_2015.from_buffer_copy(data, pos)
+                if pos + sizeof(THEA_KEYFRAME_2015) > len(data):
+                    raise SerializationException(f"File truncated at keyframe {i}, need {sizeof(THEA_KEYFRAME_2015)} bytes but only {len(data) - pos} left")
+                try:
+                    kf = THEA_KEYFRAME_2015.from_buffer_copy(data, pos)
+                except Exception as e:
+                    raise SerializationException(f"Failed to read keyframe {i} (2015): {str(e)}")
                 pos += sizeof(THEA_KEYFRAME_2015)
                 if kf.info_frame:
-                    self.log.info("Keyframe str: %s", kf.info_frame.decode('iso-8859-1'))
+                    try:
+                        self.log.info("Keyframe str: %s", kf.info_frame.decode('iso-8859-1', errors='replace'))
+                    except Exception:
+                        self.log.warning("Failed to decode info_frame for keyframe %d", i)
             else:
                 raise SerializationException("Unknown version: " + str(header.version))
 
             self.log.debug("Keyframe %d: raw time_frame=%d", i, kf.time_frame)
-            if kf.time_frame > 0:
-                duration = kf.time_frame / 1000.0  # Convert microseconds to seconds
+            
+            # Validate time_frame for reasonable bounds
+            if kf.time_frame > 0 and kf.time_frame < 10000000:  # Less than 10 seconds in microseconds
+                duration = kf.time_frame / 1000000.0  # Convert microseconds to seconds
             else:
                 duration = 1.0 / default_frame_rate
-                self.log.warning("Invalid time_frame=%d for keyframe %d, using default duration %.3fs",
-                                 kf.time_frame, i, duration)
+                if kf.time_frame <= 0:
+                    self.log.warning("Invalid time_frame=%d for keyframe %d, using default duration %.3fs",
+                                     kf.time_frame, i, duration)
+                else:
+                    self.log.warning("Suspicious time_frame=%d for keyframe %d (%.2f seconds), using default duration %.3fs",
+                                     kf.time_frame, i, kf.time_frame/1000000.0, duration)
 
             flags = kf.flag_frame
-            if flags not in (-1, 9):
-                raise UnexpectedValueException("flag_frame = " + str(flags))
+            # Validate flag_frame (should be -1 for normal frames or 9 for step sound frames)
+            # Large values indicate corrupted data or wrong byte order
+            if abs(flags) > 1000:  # Clearly corrupted data
+                self.log.warning("Invalid flag_frame=%d for keyframe %d, likely corrupted data. Using -1.", flags, i)
+                flags = -1
+            elif flags not in (-1, 9):
+                self.log.warning("Unexpected flag_frame=%d for keyframe %d, using -1. Valid values are -1 or 9.", flags, i)
+                flags = -1
 
             translation = None
             if kf.key_move != 0:
+                if pos + sizeof(SavedVec3) > len(data):
+                    raise SerializationException(f"File truncated at keyframe {i} translation data")
                 translation = SavedVec3.from_buffer_copy(data, pos)
                 pos += sizeof(SavedVec3)
 
             rotation = None
             if kf.key_orient != 0:
+                if pos + 8 + sizeof(ArxQuat) > len(data):
+                    raise SerializationException(f"File truncated at keyframe {i} rotation data")
                 pos += 8  # skip THEO_ANGLE
                 rotation = ArxQuat.from_buffer_copy(data, pos)
                 pos += sizeof(ArxQuat)
 
             if kf.key_morph != 0:
+                if pos + sizeof(THEA_MORPH) > len(data):
+                    raise SerializationException(f"File truncated at keyframe {i} morph data")
                 morph = THEA_MORPH.from_buffer_copy(data, pos)
                 pos += sizeof(THEA_MORPH)
 
+            groups_size = sizeof(THEO_GROUPANIM) * header.nb_groups
+            if pos + groups_size > len(data):
+                raise SerializationException(f"File truncated at keyframe {i} groups data, need {groups_size} bytes")
             groupsList = (THEO_GROUPANIM * header.nb_groups).from_buffer_copy(data, pos)
             pos += sizeof(groupsList)
 
@@ -192,14 +238,28 @@ class TeaSerializer(object):
                 sampleName = sample.sample_name.decode('iso-8859-1')
                 pos += sample.sample_size
 
-            pos += 4  # skip num_sfx
+            # Read num_sfx but validate it
+            try:
+                num_sfx = c_int32.from_buffer_copy(data, pos)
+                pos += sizeof(c_int32)
+                if abs(num_sfx.value) > 1000:  # Sanity check
+                    self.log.warning("Suspicious num_sfx value: %d for keyframe %d", num_sfx.value, i)
+            except Exception as e:
+                self.log.warning("Error reading num_sfx for keyframe %d: %s", i, str(e))
+                pos += 4  # Continue anyway
             results.append(TeaFrame(
                 duration=duration,
                 flags=flags,
                 translation=translation,
                 rotation=rotation,
                 groups=groupsList,
-                sampleName=sampleName
+                sampleName=sampleName,
+                key_move=bool(kf.key_move),
+                key_orient=bool(kf.key_orient),
+                key_morph=bool(kf.key_morph),
+                master_key_frame=bool(kf.master_key_frame),
+                key_frame=bool(kf.key_frame),
+                info_frame=kf.info_frame.decode('iso-8859-1') if header.version == 2015 and kf.info_frame else ""
             ))
 
         self.log.debug("File loaded with %d frames", len(results))
@@ -227,7 +287,13 @@ class TeaSerializer(object):
                 translation=frame.translation,
                 rotation=frame.rotation,
                 groups=frame.groups,
-                sampleName=frame.sampleName
+                sampleName=frame.sampleName,
+                key_move=frame.key_move,
+                key_orient=frame.key_orient,
+                key_morph=frame.key_morph,
+                master_key_frame=frame.master_key_frame,
+                key_frame=frame.key_frame,
+                info_frame=frame.info_frame
             ))
         
         # Interpolate missing translations
@@ -281,7 +347,13 @@ class TeaSerializer(object):
                             translation=interpolated_translation,
                             rotation=frames[i].rotation,
                             groups=frames[i].groups,
-                            sampleName=frames[i].sampleName
+                            sampleName=frames[i].sampleName,
+                            key_move=frames[i].key_move,
+                            key_orient=frames[i].key_orient,
+                            key_morph=frames[i].key_morph,
+                            master_key_frame=frames[i].master_key_frame,
+                            key_frame=frames[i].key_frame,
+                            info_frame=frames[i].info_frame
                         )
                         
                         self.log.debug("Interpolated translation for frame %d: x=%.3f, y=%.3f, z=%.3f", 
@@ -331,7 +403,13 @@ class TeaSerializer(object):
                             translation=frames[i].translation,
                             rotation=interpolated_rotation,
                             groups=frames[i].groups,
-                            sampleName=frames[i].sampleName
+                            sampleName=frames[i].sampleName,
+                            key_move=frames[i].key_move,
+                            key_orient=frames[i].key_orient,
+                            key_morph=frames[i].key_morph,
+                            master_key_frame=frames[i].master_key_frame,
+                            key_frame=frames[i].key_frame,
+                            info_frame=frames[i].info_frame
                         )
                         
                         self.log.debug("Interpolated rotation for frame %d: w=%.3f, x=%.3f, y=%.3f, z=%.3f", 
@@ -366,16 +444,24 @@ class TeaSerializer(object):
         if version not in [2014, 2015]:
             raise SerializationException(f"Unsupported TEA version: {version}")
         
-        # Calculate header values
-        nb_frames = len(frames)
+        # Calculate header values based on actual animation data
+        # nb_frames: Total animation duration in frame units (engine expects this for timing calculations)
+        # nb_key_frames: Actual number of keyframes in the file
+        # nb_groups: Number of bone groups per keyframe
+        
+        total_duration_seconds = sum(frame.duration for frame in frames)
+        nb_frames = max(1, int(total_duration_seconds * 24.0))  # Total duration at 24fps for engine timing
         nb_groups = len(frames[0].groups) if frames else 0
-        nb_key_frames = len(frames)
+        nb_key_frames = len(frames)  # Actual keyframe count
+        
+        self.log.debug("Animation metadata: duration=%.3fs, nb_frames=%d, nb_groups=%d, nb_key_frames=%d", 
+                       total_duration_seconds, nb_frames, nb_groups, nb_key_frames)
         
         # Create header
         header = THEA_HEADER()
-        header.identity = b"TEAFILE2015ARXLIBERTATIS"[:20].ljust(20, b'\x00')
+        header.identity = b"THEO_TEA_FILE_VERSION"[:20].ljust(20, b'\x00')  # Use proper identity
         header.version = version
-        header.anim_name = anim_name.encode('iso-8859-1')[:256].ljust(256, b'\x00')
+        header.anim_name = anim_name.encode('iso-8859-1')[:255].ljust(256, b'\x00')  # Null-terminated
         header.nb_frames = nb_frames
         header.nb_groups = nb_groups
         header.nb_key_frames = nb_key_frames
@@ -399,50 +485,62 @@ class TeaSerializer(object):
     
     def _write_keyframe(self, f, frame: TeaFrame, frame_index: int, version: int):
         """Write a single keyframe to file."""
-        # Convert duration back to microseconds
-        time_frame = max(1, int(frame.duration * 1000.0))
+        # Based on engine Animation.cpp:298 timing calculation:
+        # eerie->frames[i].time = std::chrono::microseconds(s64(tkf2015->num_frame)) * 1000 * 1000 / 24;
+        # This means num_frame should be the frame number at 24fps
         
-        # Create keyframe structure
+        # Calculate frame number for 24fps timing (this is what engine uses for timing)
+        num_frame = max(0, int(frame.duration * 24.0))
+        
+        # time_frame is duration in microseconds (this is what we read back as duration)
+        time_frame = max(1000, int(frame.duration * 1000000.0))  # Convert seconds to microseconds
+        
+        # Create keyframe structure using the metadata from the frame
         if version == 2014:
             kf = THEA_KEYFRAME_2014()
-            kf.num_frame = frame_index
+            kf.num_frame = num_frame
             kf.flag_frame = frame.flags
-            kf.master_key_frame = 1 if frame_index == 0 else 0
-            kf.key_frame = 1
-            kf.key_move = 1 if frame.translation else 0
-            kf.key_orient = 1 if frame.rotation else 0
-            kf.key_morph = 0
+            kf.master_key_frame = 1 if frame.master_key_frame else 0
+            kf.key_frame = 1 if frame.key_frame else 0
+            kf.key_move = 1 if frame.key_move else 0
+            kf.key_orient = 1 if frame.key_orient else 0
+            kf.key_morph = 1 if frame.key_morph else 0
             kf.time_frame = time_frame
         else:  # version == 2015
             kf = THEA_KEYFRAME_2015()
-            kf.num_frame = frame_index
+            kf.num_frame = num_frame
             kf.flag_frame = frame.flags
-            kf.info_frame = b""  # Empty info frame
-            kf.master_key_frame = 1 if frame_index == 0 else 0
-            kf.key_frame = 1
-            kf.key_move = 1 if frame.translation else 0
-            kf.key_orient = 1 if frame.rotation else 0
-            kf.key_morph = 0
+            # Handle info_frame - it can contain binary data
+            if frame.info_frame:
+                info_bytes = frame.info_frame.encode('iso-8859-1', errors='replace')[:255]
+                kf.info_frame = info_bytes.ljust(256, b'\\x00')
+            else:
+                kf.info_frame = b'\\x00' * 256
+            kf.master_key_frame = 1 if frame.master_key_frame else 0
+            kf.key_frame = 1 if frame.key_frame else 0
+            kf.key_move = 1 if frame.key_move else 0
+            kf.key_orient = 1 if frame.key_orient else 0
+            kf.key_morph = 1 if frame.key_morph else 0
             kf.time_frame = time_frame
             
         # Write keyframe
         f.write(kf)
         
-        # Write translation if present
-        if frame.translation:
+        # Write translation if flag is set
+        if kf.key_move:
             f.write(frame.translation)
             
-        # Write rotation if present
-        if frame.rotation:
+        # Write rotation if flag is set
+        if kf.key_orient:
             # Write 8 bytes for THEO_ANGLE (ignored)
             f.write(b'\x00' * 8)
             # Write quaternion
             f.write(frame.rotation)
             
-        # Write morph data if needed (currently always skipped)
-        # if kf.key_morph:
-        #     morph = THEA_MORPH()
-        #     f.write(morph)
+        # Write morph data if flag is set (currently always skipped)
+        if kf.key_morph:
+            morph = THEA_MORPH()
+            f.write(morph)
             
         # Write groups
         for group in frame.groups:
