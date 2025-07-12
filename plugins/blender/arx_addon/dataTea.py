@@ -349,3 +349,120 @@ class TeaSerializer(object):
             total_time += frames[i].duration
             
         return total_time
+
+    def write(self, frames: List[TeaFrame], fileName: str, anim_name: str = "", version: int = 2015):
+        """
+        Write TEA animation data to a file.
+        Args:
+            frames: List of TeaFrame objects containing animation data
+            fileName: Output file path
+            anim_name: Animation name (default empty)
+            version: TEA version (2014 or 2015, default 2015)
+        """
+        if not frames:
+            raise SerializationException("No frames to write")
+        
+        # Validate version
+        if version not in [2014, 2015]:
+            raise SerializationException(f"Unsupported TEA version: {version}")
+        
+        # Calculate header values
+        nb_frames = len(frames)
+        nb_groups = len(frames[0].groups) if frames else 0
+        nb_key_frames = len(frames)
+        
+        # Create header
+        header = THEA_HEADER()
+        header.identity = b"TEAFILE2015ARXLIBERTATIS"[:20].ljust(20, b'\x00')
+        header.version = version
+        header.anim_name = anim_name.encode('iso-8859-1')[:256].ljust(256, b'\x00')
+        header.nb_frames = nb_frames
+        header.nb_groups = nb_groups
+        header.nb_key_frames = nb_key_frames
+        
+        self.log.debug("Writing TEA file: %s", fileName)
+        self.log.debug("Header - Version: %d, Frames: %d, Groups: %d, KeyFrames: %d", 
+                       version, nb_frames, nb_groups, nb_key_frames)
+        
+        # Write to file
+        with open(fileName, "wb") as f:
+            # Write header
+            f.write(header)
+            
+            # Write keyframes
+            for i, frame in enumerate(frames):
+                self._write_keyframe(f, frame, i, version)
+                
+            file_size = f.tell()
+                
+        self.log.debug("Successfully wrote %d bytes to %s", file_size, fileName)
+    
+    def _write_keyframe(self, f, frame: TeaFrame, frame_index: int, version: int):
+        """Write a single keyframe to file."""
+        # Convert duration back to microseconds
+        time_frame = max(1, int(frame.duration * 1000.0))
+        
+        # Create keyframe structure
+        if version == 2014:
+            kf = THEA_KEYFRAME_2014()
+            kf.num_frame = frame_index
+            kf.flag_frame = frame.flags
+            kf.master_key_frame = 1 if frame_index == 0 else 0
+            kf.key_frame = 1
+            kf.key_move = 1 if frame.translation else 0
+            kf.key_orient = 1 if frame.rotation else 0
+            kf.key_morph = 0
+            kf.time_frame = time_frame
+        else:  # version == 2015
+            kf = THEA_KEYFRAME_2015()
+            kf.num_frame = frame_index
+            kf.flag_frame = frame.flags
+            kf.info_frame = b""  # Empty info frame
+            kf.master_key_frame = 1 if frame_index == 0 else 0
+            kf.key_frame = 1
+            kf.key_move = 1 if frame.translation else 0
+            kf.key_orient = 1 if frame.rotation else 0
+            kf.key_morph = 0
+            kf.time_frame = time_frame
+            
+        # Write keyframe
+        f.write(kf)
+        
+        # Write translation if present
+        if frame.translation:
+            f.write(frame.translation)
+            
+        # Write rotation if present
+        if frame.rotation:
+            # Write 8 bytes for THEO_ANGLE (ignored)
+            f.write(b'\x00' * 8)
+            # Write quaternion
+            f.write(frame.rotation)
+            
+        # Write morph data if needed (currently always skipped)
+        # if kf.key_morph:
+        #     morph = THEA_MORPH()
+        #     f.write(morph)
+            
+        # Write groups
+        for group in frame.groups:
+            f.write(group)
+            
+        # Write sample data
+        num_sample = c_int32(-1)  # No sample
+        if frame.sampleName:
+            # TODO: Implement sample writing if needed
+            pass
+            
+        f.write(num_sample)
+        
+        # Write sample if present
+        if frame.sampleName:
+            sample = THEA_SAMPLE()
+            sample.sample_name = frame.sampleName.encode('iso-8859-1')[:256].ljust(256, b'\x00')
+            sample.sample_size = 0  # No sample data
+            f.write(sample)
+            
+        # Write num_sfx (always 0)
+        num_sfx = c_int32(0)
+        f.write(num_sfx)

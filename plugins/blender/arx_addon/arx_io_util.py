@@ -57,3 +57,5 @@ def arx_transform_to_blender(location, rotation, scale, scale_factor=0.1, flip_w
     scl = Vector((1.0, 1.0, 1.0)) if scale.length == 0 else Vector((scale.x, scale.z, scale.y))
     
     return loc, rot, scl
+
+

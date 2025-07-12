@@ -164,6 +164,90 @@ class ImportTea(bpy.types.Operator, ImportHelper):
 def menu_func_import_tea(self, context):
     self.layout.operator(ImportTea.bl_idname, text="Tea animation (.tea)")
 
+class ExportTea(bpy.types.Operator, ExportHelper):
+    bl_idname = "arx.export_tea"
+    bl_label = 'Export Tea animation'
+    bl_description = 'Export Tea animation (.tea) file'
+    bl_options = {'PRESET', 'UNDO'}
+    filename_ext = ".tea"
+    check_extension = True
+    filter_glob: StringProperty(default="*.tea", options={'HIDDEN'})
+    
+    # Animation export options
+    action_name: StringProperty(
+        name="Action Name",
+        description="Name of the action to export (leave empty for active action)",
+        default=""
+    )
+    frame_rate: bpy.props.FloatProperty(
+        name="Frame Rate",
+        description="Frame rate for the animation",
+        default=24.0,
+        min=1.0,
+        max=120.0
+    )
+    scale_factor: bpy.props.FloatProperty(
+        name="Scale Factor",
+        description="Scale factor for positions",
+        default=0.1,
+        min=0.001,
+        max=10.0
+    )
+    tea_version: bpy.props.EnumProperty(
+        name="TEA Version",
+        description="TEA file format version",
+        items=[
+            ('2014', "2014", "TEA version 2014"),
+            ('2015', "2015", "TEA version 2015")
+        ],
+        default='2015'
+    )
+    
+    def execute(self, context):
+        try:
+            # Get the active object
+            obj = context.active_object
+            if not obj or obj.type != 'MESH':
+                self.report({'ERROR'}, "Please select a mesh object with an armature")
+                return {'CANCELLED'}
+            
+            # Check if mesh has armature
+            armature_obj = None
+            for modifier in obj.modifiers:
+                if modifier.type == 'ARMATURE' and modifier.object:
+                    armature_obj = modifier.object
+                    break
+            
+            if not armature_obj:
+                self.report({'ERROR'}, "Selected mesh has no armature modifier")
+                return {'CANCELLED'}
+            
+            # Get action name
+            action_name = self.action_name if self.action_name else None
+            
+            # Export animation
+            success = getAddon(context).animationManager.saveAnimation(
+                self.filepath,
+                action_name=action_name,
+                frame_rate=self.frame_rate,
+                scale_factor=self.scale_factor,
+                version=int(self.tea_version)
+            )
+            
+            if success:
+                self.report({'INFO'}, f"Animation exported to {self.filepath}")
+                return {'FINISHED'}
+            else:
+                self.report({'ERROR'}, "Failed to export animation")
+                return {'CANCELLED'}
+                
+        except ArxException as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+
+def menu_func_export_tea(self, context):
+    self.layout.operator(ExportTea.bl_idname, text="Tea animation (.tea)")
+
 classes = (
     ArxAddonPreferences,
     ArxOperatorImportAllModels,
@@ -174,7 +258,8 @@ classes = (
     ArxFacePanel,
     ImportFTL,
     ExportFTL,
-    ImportTea
+    ImportTea,
+    ExportTea
 )
 
 def register():
@@ -185,12 +270,14 @@ def register():
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_ftl)
     bpy.types.TOPBAR_MT_file_export.append(menu_func_export_ftl)
     bpy.types.TOPBAR_MT_file_import.append(menu_func_import_tea)
+    bpy.types.TOPBAR_MT_file_export.append(menu_func_export_tea)
 
 def unregister():
     log.debug("unregister")
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_ftl)
     bpy.types.TOPBAR_MT_file_export.remove(menu_func_export_ftl)
     bpy.types.TOPBAR_MT_file_import.remove(menu_func_import_tea)
+    bpy.types.TOPBAR_MT_file_export.remove(menu_func_export_tea)
     for cls in reversed(classes):
         bpy.utils.unregister_class(cls)
     arx_ui_area_unregister()

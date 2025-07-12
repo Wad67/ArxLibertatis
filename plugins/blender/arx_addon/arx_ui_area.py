@@ -101,9 +101,9 @@ class ArxOperatorImportAllLevels(Operator):
 class ArxAnimationTestProperties(PropertyGroup):
     model: StringProperty(name="Model", description="Selected NPC model")
     animation: StringProperty(name="Animation", description="Selected animation")
-    flip_w: BoolProperty(name="Flip W", default=True, description="Flip quaternion W component")
+    flip_w: BoolProperty(name="Flip W", default=False, description="Flip quaternion W component")
     flip_x: BoolProperty(name="Flip X", default=False, description="Flip quaternion X component")
-    flip_y: BoolProperty(name="Flip Y", default=True, description="Flip quaternion Y component")
+    flip_y: BoolProperty(name="Flip Y", default=False, description="Flip quaternion Y component")
     flip_z: BoolProperty(name="Flip Z", default=False, description="Flip quaternion Z component")
     axis_mapping: EnumProperty(
         name="Axis Mapping",

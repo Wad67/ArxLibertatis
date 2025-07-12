@@ -19,11 +19,40 @@ import logging
 import bpy
 import re
 from mathutils import Vector, Quaternion, Matrix
-from .arx_io_util import arx_pos_to_blender_for_model, arx_transform_to_blender, ArxException
-from .dataTea import TeaSerializer
+from .arx_io_util import arx_pos_to_blender_for_model, arx_transform_to_blender, blender_pos_to_arx, ArxException
+from .dataTea import TeaSerializer, TeaFrame, THEO_GROUPANIM
+from .dataCommon import SavedVec3, ArxQuat
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
+
+def blender_to_arx_transform(location, rotation, scale, scale_factor=0.1, flip_w=True, flip_x=False, flip_y=True, flip_z=False):
+    """Exact inverse of arx_transform_to_blender"""
+    # Reverse the location transformation: from blender back to arx coordinates 
+    arx_pos = blender_pos_to_arx(location) 
+    arx_loc = Vector(arx_pos) / scale_factor
+    
+    # Reverse the rotation transformation
+    rot_matrix = rotation.to_matrix().to_4x4()
+    # Inverse transform matrix (transpose of the original)
+    inv_transform_matrix = Matrix([[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1]])
+    transformed_matrix = inv_transform_matrix @ rot_matrix @ inv_transform_matrix.inverted()
+    arx_rot = transformed_matrix.to_quaternion()
+    
+    # Reverse the flips
+    w, x, y, z = arx_rot
+    arx_rot = Quaternion((
+        -w if flip_w else w,
+        -x if flip_x else x,
+        -y if flip_y else y,
+        -z if flip_z else z
+    ))
+    
+    # Reverse the scale transformation 
+    arx_scale = Vector((scale.x, scale.z, scale.y))
+    
+    return arx_loc, arx_rot, arx_scale
+
 
 def parse_group_index(name):
     """
@@ -196,7 +225,7 @@ class ArxAnimationManager(object):
                 self.log.debug("Frame %d, Group %d, Bone %s: Applied loc=%s, rot=%s, scl=%s, matrix=%s", 
                                frame_index, group_index, bone.name, loc, rot, scl, bone.matrix)
 
-    def loadAnimation(self, path, action_name=None, frame_rate=24.0, scale_factor=0.1, axis_transform=None, flip_w=True, flip_x=False, flip_y=True, flip_z=False):
+    def loadAnimation(self, path, action_name=None, frame_rate=24.0, scale_factor=0.1, axis_transform=None, flip_w=False, flip_x=False, flip_y=False, flip_z=False):
         """
         Load an animation from a TEA file and apply it to the active mesh and its armature.
         Args:
@@ -278,3 +307,215 @@ class ArxAnimationManager(object):
                       len(data), total_blender_frames, total_duration, frame_rate, len(animatable_indices))
 
         return action
+
+    def saveAnimation(self, path, action_name=None, frame_rate=24.0, scale_factor=0.1, version=2015):
+        """
+        Export an animation from Blender to a TEA file.
+        Args:
+            path: Path to the output TEA file.
+            action_name: Name of the action to export (default: active action).
+            frame_rate: Source frame rate (default 24.0).
+            scale_factor: Scaling factor for positions (default 0.1).
+            version: TEA version (2014 or 2015, default 2015).
+        Returns:
+            True if successful, False otherwise.
+        """
+        obj = bpy.context.active_object
+        if not obj or obj.type != 'MESH':
+            self.log.error("No mesh object selected for animation export")
+            return False
+
+        armature_obj = None
+        for modifier in obj.modifiers:
+            if modifier.type == 'ARMATURE' and modifier.object:
+                armature_obj = modifier.object
+                break
+
+        if not armature_obj:
+            self.log.error("No armature found for mesh '%s'", obj.name)
+            return False
+
+        # Get the action to export
+        action = None
+        if action_name:
+            action = bpy.data.actions.get(action_name)
+            if not action:
+                self.log.error("Action '%s' not found", action_name)
+                return False
+        else:
+            if armature_obj.animation_data and armature_obj.animation_data.action:
+                action = armature_obj.animation_data.action
+            else:
+                self.log.error("No action found to export")
+                return False
+
+        # Build mappings
+        bone_map = {}
+        for bone in armature_obj.pose.bones:
+            group_index = parse_group_index(bone.name)
+            if group_index is not None:
+                bone_map[group_index] = bone
+
+        if not bone_map:
+            self.log.error("No bones with parseable group indices found")
+            return False
+
+        # Determine animation frame range
+        frame_start = int(action.frame_range[0])
+        frame_end = int(action.frame_range[1])
+        self.log.info("Exporting animation '%s' frames %d-%d", action.name, frame_start, frame_end)
+
+        # Extract animation data
+        frames = []
+        original_frame = bpy.context.scene.frame_current
+        
+        try:
+            bpy.context.view_layer.objects.active = armature_obj
+            bpy.ops.object.mode_set(mode='POSE')
+            
+            for frame_num in range(frame_start, frame_end + 1):
+                bpy.context.scene.frame_set(frame_num)
+                
+                # Calculate frame duration
+                duration = 1.0 / frame_rate  # Default duration
+                
+                # Get root translation and rotation from mesh object
+                root_translation = None
+                root_rotation = None
+                
+                if obj.animation_data and obj.animation_data.action == action:
+                    root_translation = self._extract_translation_from_object(obj, scale_factor)
+                    root_rotation = self._extract_rotation_from_object(obj)
+                
+                # Extract bone transformations
+                groups = self._extract_bone_groups(armature_obj, bone_map, scale_factor)
+                
+                # Create frame
+                frame = TeaFrame(
+                    duration=duration,
+                    flags=-1,  # Default flag (no step sound)
+                    translation=root_translation,
+                    rotation=root_rotation,
+                    groups=groups,
+                    sampleName=None
+                )
+                
+                frames.append(frame)
+                
+        finally:
+            bpy.context.scene.frame_set(original_frame)
+            bpy.ops.object.mode_set(mode='OBJECT')
+
+        if not frames:
+            self.log.error("No animation frames extracted")
+            return False
+
+        # Write TEA file
+        try:
+            self.teaSerializer.write(frames, path, action.name, version)
+            self.log.info("Successfully exported animation to %s", path)
+            return True
+        except Exception as e:
+            self.log.error("Failed to write TEA file: %s", str(e))
+            return False
+
+    def _extract_translation_from_object(self, obj, scale_factor):
+        """Extract translation from object, converting to Arx coordinate system."""
+        if not obj.animation_data or not obj.animation_data.action:
+            return None
+            
+        location = obj.location.copy()
+        rotation = Quaternion((1, 0, 0, 0))  # Identity quaternion
+        scale = Vector((1, 1, 1))  # Unit scale
+        
+        # Use inverse coordinate conversion with same defaults as import
+        arx_loc, _, _ = blender_to_arx_transform(location, rotation, scale, scale_factor, flip_w=False, flip_x=False, flip_y=False, flip_z=False)
+        
+        arx_location = SavedVec3()
+        arx_location.x = arx_loc.x
+        arx_location.y = arx_loc.y
+        arx_location.z = arx_loc.z
+        return arx_location
+
+    def _extract_rotation_from_object(self, obj):
+        """Extract rotation from object, converting to Arx coordinate system."""
+        if not obj.animation_data or not obj.animation_data.action:
+            return None
+            
+        if obj.rotation_mode == 'QUATERNION':
+            rotation = obj.rotation_quaternion.copy()
+        else:
+            rotation = obj.rotation_euler.to_quaternion()
+            
+        location = Vector((0, 0, 0))  # Zero location
+        scale = Vector((1, 1, 1))  # Unit scale
+        
+        # Use inverse coordinate conversion with same defaults as import
+        _, arx_rot, _ = blender_to_arx_transform(location, rotation, scale, 0.1, flip_w=False, flip_x=False, flip_y=False, flip_z=False)
+        
+        arx_rotation = ArxQuat()
+        arx_rotation.w = arx_rot.w
+        arx_rotation.x = arx_rot.x
+        arx_rotation.y = arx_rot.y
+        arx_rotation.z = arx_rot.z
+        return arx_rotation
+
+    def _extract_bone_groups(self, armature_obj, bone_map, scale_factor):
+        """Extract bone transformations for all groups."""
+        max_group_index = max(bone_map.keys()) if bone_map else 0
+        groups = []
+        
+        for i in range(max_group_index + 1):
+            group = THEO_GROUPANIM()
+            
+            if i in bone_map:
+                bone = bone_map[i]
+                
+                # Get bone transformations
+                location = bone.location.copy()
+                if bone.rotation_mode == 'QUATERNION':
+                    rotation = bone.rotation_quaternion.copy()
+                else:
+                    rotation = bone.rotation_euler.to_quaternion()
+                scale = bone.scale.copy()
+                
+                # Use inverse coordinate conversion with same defaults as import
+                arx_loc, arx_rot, arx_scale = blender_to_arx_transform(location, rotation, scale, scale_factor, flip_w=False, flip_x=False, flip_y=False, flip_z=False)
+                
+                group.key_group = i
+                group.translate.x = arx_loc.x
+                group.translate.y = arx_loc.y
+                group.translate.z = arx_loc.z
+                
+                group.Quaternion.w = arx_rot.w
+                group.Quaternion.x = arx_rot.x
+                group.Quaternion.y = arx_rot.y
+                group.Quaternion.z = arx_rot.z
+                
+                # Check if scale is significantly different from (1,1,1) before writing
+                if abs(scale.x - 1.0) > 0.001 or abs(scale.y - 1.0) > 0.001 or abs(scale.z - 1.0) > 0.001:
+                    group.zoom.x = arx_scale.x
+                    group.zoom.y = arx_scale.y
+                    group.zoom.z = arx_scale.z
+                else:
+                    # No significant scaling, write zeros like the original
+                    group.zoom.x = 0.0
+                    group.zoom.y = 0.0
+                    group.zoom.z = 0.0
+            else:
+                # Empty group
+                group.key_group = -1
+                group.translate.x = 0.0
+                group.translate.y = 0.0
+                group.translate.z = 0.0
+                group.Quaternion.w = 1.0
+                group.Quaternion.x = 0.0
+                group.Quaternion.y = 0.0
+                group.Quaternion.z = 0.0
+                group.zoom.x = 0.0
+                group.zoom.y = 0.0
+                group.zoom.z = 0.0
+                
+            groups.append(group)
+            
+        return groups
