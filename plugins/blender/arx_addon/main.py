@@ -79,7 +79,10 @@ class ArxLevelsPanel(bpy.types.Panel):
         area_list = context.window_manager.arx_areas_col
         if area_list:
             layout.template_list("SCENE_UL_arx_area_list", "", context.window_manager, "arx_areas_col", context.window_manager, "arx_areas_idx")
-            layout.operator("arx.area_list_import_selected")
+            row = layout.row()
+            row.operator("arx.area_list_import_selected")
+            row.operator("arx.area_list_export_selected")
+            layout.operator("arx.view_face_attributes", text="View Face Attributes")
 
 class ArxOperatorTestModelExport(bpy.types.Operator):
     bl_idname = "arx.operator_test_model_export"

@@ -225,6 +225,10 @@ class Levels:
             if not lvlName.startswith('level'):
                 self.danglingPaths.append(l)
                 continue
+            
+            # Skip backup directories
+            if '_backup' in lvlName:
+                continue
 
             area_index = int(lvlName[5:])
 
@@ -235,6 +239,9 @@ class Levels:
                 blubb = os.path.join(l, bar)
                 if not os.path.isdir(blubb):
                     name, ext = os.path.splitext(bar)
+                    # Skip backup files
+                    if '.backup' in bar or '_backup' in bar:
+                        continue
                     if ext == ".fts":
                         info.fts = blubb
                     elif ext == ".llf":

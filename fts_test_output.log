@@ -1,0 +1,550 @@
+=== FTS Export Test Script ===
+Output will be logged to: /home/burner/Desktop/ArxLibertatis/fts_test_output.log
+Step 1: Restoring original FTS file from backup...
+  Restored: /home/burner/Desktop/ArxLibertatis/build/game/graph/levels/level1/fast.fts
+Step 2: Running Blender with UI...
+  Executing Blender with UI automation...
+DEBUG:ArxAddon:register
+INFO:ArxAddon:creating
+INFO:ArxAddon:invalidating
+INFO:ArxAddon:creating
+INFO:ArxSceneManager:Importing Area: 1
+DEBUG:DlfSerializer:Loaded 23597 bytes from file /home/burner/Desktop/ArxLibertatis/build/graph/levels/level1/level1.dlf
+DEBUG:DlfSerializer:DANAE_LS_HEADER version: 1.440000
+DEBUG:DlfSerializer:DANAE_LS_SCENE name: Graph\Levels\Level1\
+DEBUG:FtsSerializer:Loaded 5336967 bytes from file /home/burner/Desktop/ArxLibertatis/build/game/graph/levels/level1/fast.fts
+DEBUG:FtsSerializer:Header path: C:\ARX\Game\Graph\Levels\Level1\
+DEBUG:FtsSerializer:Header count: 2
+DEBUG:FtsSerializer:Header version: 0.141000
+DEBUG:FtsSerializer:Header uncompressedsize: 11180884
+DEBUG:FtsSerializer:Header2 path: Anchor1.scn
+DEBUG:FtsSerializer:Header2 path: Level_1_portalized.scn
+DEBUG:FtsSerializer:About to unpack from position 1816 (0x718), remaining data: 5335151 bytes
+DEBUG:FtsSerializer:Fts Header version: 0.141000
+DEBUG:FtsSerializer:Fts Header size x,z: 160,160
+DEBUG:FtsSerializer:Fts Header playerpos: 8650.000000,3105.079102,8550.000000
+DEBUG:FtsSerializer:Fts Header Mscenepos: 16250.000000,3105.079102,5550.000000
+DEBUG:FtsSerializer:Fts Header nb_rooms: 52
+DEBUG:FtsSerializer:Loaded 206 textures
+DEBUG:FtsSerializer:Loaded 11180884 bytes of 11180884
+INFO:FtsSerializer:Stored original header: uncompressed=11180884, nb_rooms=52
+INFO:LlfSerializer:Loaded 437501 bytes from file /home/burner/Desktop/ArxLibertatis/build/graph/levels/level1/level1.llf
+INFO:ArxSceneManager:Creating entity [items/magic/rune_aam_0007]
+INFO:ArxSceneManager:Creating entity [items/weapons/short_sword_0005]
+INFO:ArxSceneManager:Creating entity [items/weapons/club_0007]
+INFO:ArxSceneManager:Creating entity [items/weapons/club_0008]
+INFO:ArxSceneManager:Creating entity [items/magic/rune_aam_0008]
+INFO:ArxSceneManager:Creating entity [items/weapons/long_sword_0003]
+INFO:ArxSceneManager:Creating entity [items/weapons/club_0009]
+INFO:ArxSceneManager:Creating entity [items/armor/chest_leather_0003]
+INFO:ArxSceneManager:Creating entity [fix_inter/porticullis_0013]
+INFO:ArxSceneManager:Creating entity [fix_inter/porticullis_0015]
+INFO:ArxSceneManager:Creating entity [fix_inter/light_door_0075]
+INFO:ArxSceneManager:Creating entity [system/marker_0173]
+INFO:ArxSceneManager:Creating entity [fix_inter/lever_0011]
+INFO:ArxSceneManager:Creating entity [fix_inter/lever_0012]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0007]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0009]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0008]
+INFO:ArxSceneManager:Creating entity [items/provisions/bottle_wine_0002]
+INFO:ArxSceneManager:Creating entity [items/provisions/food_fish_0009]
+INFO:ArxSceneManager:Creating entity [items/quest_item/note_0003]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0010]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0051]
+INFO:ArxSceneManager:Creating entity [fix_inter/ice_bloc_0001]
+INFO:ArxSceneManager:Creating entity [fix_inter/corpse_0016]
+INFO:ArxSceneManager:Creating entity [fix_inter/roof_bloc_0001]
+INFO:ArxSceneManager:Creating entity [fix_inter/porticullis_0016]
+INFO:ArxSceneManager:Creating entity [fix_inter/porticullis_0017]
+INFO:ArxSceneManager:Creating entity [fix_inter/lever_0014]
+INFO:ArxSceneManager:Creating entity [fix_inter/lever_0015]
+INFO:ArxSceneManager:Creating entity [items/weapons/club_0011]
+INFO:ArxSceneManager:Creating entity [system/marker_0400]
+INFO:ArxSceneManager:Creating entity [fix_inter/corpse_0017]
+INFO:ArxSceneManager:Creating entity [fix_inter/corpse_0018]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0001]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0002]
+INFO:ArxSceneManager:Creating entity [fix_inter/light_door_0007]
+INFO:ArxSceneManager:Creating entity [fix_inter/light_door_0076]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0003]
+INFO:ArxSceneManager:Creating entity [fix_inter/public_notice_0007]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0004]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0050]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0005]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0012]
+INFO:ArxSceneManager:Creating entity [fix_inter/secret_button_0002]
+INFO:ArxSceneManager:Creating entity [fix_inter/light_door_0008]
+INFO:ArxSceneManager:Creating entity [items/quest_item/key_base_0005]
+INFO:ArxSceneManager:Creating entity [fix_inter/porticullis_0018]
+INFO:ArxSceneManager:Creating entity [fix_inter/lever_0016]
+INFO:ArxSceneManager:Creating entity [fix_inter/chest_metal_0052]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0006]
+INFO:ArxSceneManager:Creating entity [fix_inter/anvil_0003]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0006]
+INFO:ArxSceneManager:Creating entity [fix_inter/chest_metal_0051]
+INFO:ArxSceneManager:Creating entity [items/quest_item/note_0004]
+INFO:ArxSceneManager:Creating entity [items/provisions/food_fish_0001]
+INFO:ArxSceneManager:Creating entity [fix_inter/untwisted_portcullis_2_0003]
+INFO:ArxSceneManager:Creating entity [items/quest_item/jail_stone_0003]
+INFO:ArxSceneManager:Creating entity [npc/troll_base_0008]
+INFO:ArxSceneManager:Creating entity [items/quest_item/mud_putty_0001]
+INFO:ArxSceneManager:Creating entity [items/provisions/food_fish_0006]
+INFO:ArxSceneManager:Creating entity [items/provisions/food_fish_0008]
+INFO:ArxSceneManager:Creating entity [items/provisions/food_fish_0010]
+INFO:ArxSceneManager:Creating entity [items/provisions/food_fish_0011]
+INFO:ArxSceneManager:Creating entity [items/quest_item/amulet_troll_0001]
+INFO:ArxSceneManager:Creating entity [items/movable/skull_0013]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0001]
+INFO:ArxSceneManager:Creating entity [items/movable/plate_clean_0001]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0026]
+INFO:ArxSceneManager:Creating entity [items/quest_item/blank_form_0001]
+INFO:ArxSceneManager:Creating entity [items/movable/plate_dirty_0002]
+INFO:ArxSceneManager:Creating entity [items/quest_item/dragon_egg_0002]
+INFO:ArxSceneManager:Creating entity [items/quest_item/dragon_egg_0003]
+INFO:ArxSceneManager:Creating entity [items/quest_item/dragon_egg_0004]
+INFO:ArxSceneManager:Creating entity [system/marker_0001]
+INFO:ArxSceneManager:Creating entity [system/camera_0030]
+INFO:ArxSceneManager:Creating entity [system/camera_0004]
+INFO:ArxSceneManager:Creating entity [system/marker_0110]
+INFO:ArxSceneManager:Creating entity [system/camera_0031]
+INFO:ArxSceneManager:Creating entity [system/camera_0032]
+INFO:ArxSceneManager:Creating entity [system/camera_0033]
+INFO:ArxSceneManager:Creating entity [system/camera_0034]
+INFO:ArxSceneManager:Creating entity [system/marker_0111]
+INFO:ArxSceneManager:Creating entity [system/marker_0112]
+INFO:ArxSceneManager:Creating entity [system/camera_0044]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0036]
+INFO:ArxSceneManager:Creating entity [system/camera_0035]
+INFO:ArxSceneManager:Creating entity [system/camera_0038]
+INFO:ArxSceneManager:Creating entity [system/camera_0039]
+INFO:ArxSceneManager:Creating entity [fix_inter/light_door_0074]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0048]
+INFO:ArxSceneManager:Creating entity [system/marker_0147]
+INFO:ArxSceneManager:Creating entity [system/marker_0148]
+INFO:ArxSceneManager:Creating entity [system/marker_0150]
+INFO:ArxSceneManager:Creating entity [system/marker_0152]
+INFO:ArxSceneManager:Creating entity [fix_inter/jail_wood_grid_0001]
+INFO:ArxSceneManager:Creating entity [npc/dragon_ice_0001]
+INFO:ArxSceneManager:Creating entity [system/marker_0258]
+INFO:ArxSceneManager:Creating entity [system/marker_0117]
+INFO:ArxSceneManager:Creating entity [items/movable/greu_art1_0001]
+INFO:ArxSceneManager:Creating entity [items/movable/greu_art2_0001]
+INFO:ArxSceneManager:Creating entity [items/movable/greu_art3_0001]
+INFO:ArxSceneManager:Creating entity [npc/human_base_0028]
+INFO:ArxSceneManager:Creating entity [npc/mice_0006]
+INFO:ArxSceneManager:Creating entity [npc/mice_0014]
+INFO:ArxSceneManager:Creating entity [npc/mice_0015]
+INFO:ArxSceneManager:Creating entity [npc/mice_0017]
+INFO:ArxSceneManager:Creating entity [npc/rat_base_0075]
+INFO:ArxSceneManager:Creating entity [items/provisions/bread_half_0001]
+INFO:ArxSceneManager:Creating entity [system/marker_0028]
+INFO:ArxSceneManager:Creating entity [items/movable/greu_art1_0002]
+INFO:ArxSceneManager:Creating entity [items/movable/greu_art2_0002]
+INFO:ArxSceneManager:Creating entity [items/movable/mug_0007]
+INFO:ArxSceneManager:Creating entity [items/provisions/cheese_0003]
+INFO:ArxSceneManager:Creating entity [items/provisions/cheese_0004]
+INFO:ArxSceneManager:Creating entity [items/provisions/bread_0007]
+INFO:ArxSceneManager:Creating entity [items/movable/seat_stool4_goblin_0001]
+INFO:ArxSceneManager:Creating entity [items/movable/seat_stool4_goblin_0002]
+INFO:ArxSceneManager:Creating entity [items/movable/l2_gobel_chair_02_0004]
+INFO:ArxSceneManager:Creating entity [items/movable/seat_bench4_goblin_0002]
+INFO:ArxSceneManager:Creating entity [items/movable/seat_stool4_goblin_0003]
+INFO:ArxSceneManager:Creating entity [items/movable/seat_bench4_goblin_0003]
+INFO:ArxSceneManager:Creating entity [items/movable/seat_chair2_rustic_0001]
+INFO:ArxSceneManager:Creating entity [items/movable/seat_stool4_goblin_0004]
+INFO:ArxSceneManager:Creating entity [items/movable/seat_stool1_0002]
+INFO:ArxSceneManager:Creating entity [items/movable/seat_stool4_goblin_0005]
+INFO:ArxSceneManager:Creating entity [items/movable/seat_chair2_rustic_0002]
+INFO:ArxSceneManager:Creating entity [items/movable/chess_0001]
+INFO:ArxSceneManager:Creating entity [items/movable/bones_0002]
+INFO:ArxSceneManager:Creating entity [items/movable/skull_0021]
+INFO:ArxSceneManager:Creating entity [items/movable/jar_0010]
+INFO:ArxSceneManager:Creating entity [items/movable/mug_0008]
+INFO:ArxSceneManager:Creating entity [items/movable/cuscion_0011]
+INFO:ArxSceneManager:Creating entity [items/movable/tool_blacksmith_pliers3_0004]
+INFO:ArxSceneManager:Creating entity [fix_inter/barrel_0018]
+INFO:ArxSceneManager:Creating entity [items/special/rolling_pin_0003]
+INFO:ArxSceneManager:Creating entity [items/provisions/lockpicks_0002]
+INFO:ArxSceneManager:Creating entity [fix_inter/water_bassin_0002]
+INFO:ArxSceneManager:Creating entity [system/marker_0225]
+INFO:ArxSceneManager:Creating entity [system/marker_0228]
+INFO:ArxSceneManager:Creating entity [fix_inter/jail_wood&metal_grid_0001]
+INFO:ArxSceneManager:Creating entity [system/marker_0260]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0040]
+INFO:ArxSceneManager:Creating entity [items/magic/potion_life_0007]
+INFO:ArxSceneManager:Creating entity [items/magic/fern_0008]
+INFO:ArxSceneManager:Creating entity [items/magic/fern_0009]
+INFO:ArxSceneManager:Creating entity [items/magic/fern_0010]
+INFO:ArxSceneManager:Creating entity [items/magic/medicinal_herb_0005]
+INFO:ArxSceneManager:Creating entity [items/magic/morning_glory_0009]
+INFO:ArxSceneManager:Creating entity [items/magic/morning_glory_0010]
+INFO:ArxSceneManager:Creating entity [items/magic/morning_glory_0011]
+INFO:ArxSceneManager:Creating entity [items/magic/morning_glory_0012]
+INFO:ArxSceneManager:Creating entity [items/magic/fern_0011]
+INFO:ArxSceneManager:Creating entity [items/movable/greu_art3_0002]
+INFO:ArxSceneManager:Creating entity [items/movable/greu_art2_0003]
+INFO:ArxSceneManager:Creating entity [items/magic/fern_0012]
+INFO:ArxSceneManager:Creating entity [items/magic/fern_0013]
+INFO:ArxSceneManager:Creating entity [items/magic/medicinal_herb_0006]
+INFO:ArxSceneManager:Creating entity [fix_inter/fish_spawn_0007]
+INFO:ArxSceneManager:Creating entity [fix_inter/snake_teleport_center_0005]
+INFO:ArxSceneManager:Creating entity [fix_inter/snake_teleport_door_0032]
+INFO:ArxSceneManager:Creating entity [fix_inter/snake_teleport_door_0033]
+INFO:ArxSceneManager:Creating entity [system/marker_0321]
+INFO:ArxSceneManager:Creating entity [fix_inter/snake_teleport_door_0035]
+INFO:ArxSceneManager:Creating entity [fix_inter/snake_teleport_door_0036]
+INFO:ArxSceneManager:Creating entity [fix_inter/snake_teleport_door_0037]
+INFO:ArxSceneManager:Creating entity [fix_inter/snake_teleport_door_0038]
+INFO:ArxSceneManager:Creating entity [fix_inter/snake_teleport_door_0039]
+INFO:ArxSceneManager:Creating entity [fix_inter/snake_teleport_door_0040]
+INFO:ArxSceneManager:Creating entity [fix_inter/lever_base_0003]
+INFO:ArxSceneManager:Creating entity [items/magic/rune_aam_0018]
+INFO:ArxSceneManager:Creating entity [system/marker_0325]
+INFO:ArxSceneManager:Creating entity [items/movable/seat_stool4_goblin_0007]
+INFO:ArxSceneManager:Creating entity [items/quest_item/key_gob_weap_0001]
+INFO:ArxSceneManager:Creating entity [system/marker_0367]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0015]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0039]
+INFO:ArxSceneManager:Creating entity [npc/goblin_base_0049]
+INFO:ArxSceneManager:Creating entity [fix_inter/porticullis_0104]
+INFO:ArxSceneManager:Creating entity [fix_inter/porticullis_0105]
+INFO:ArxSceneManager:Creating entity [items/special/sausage_0020]
+INFO:ArxSceneManager:Creating entity [items/special/sausage_0055]
+INFO:ArxSceneManager:Creating entity [items/special/sausage_0056]
+INFO:ArxSceneManager:Creating entity [system/camera_0080]
+INFO:ArxSceneManager:Creating entity [system/marker_0418]
+INFO:ArxSceneManager:Creating entity [system/marker_0420]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0033]
+INFO:ArxSceneManager:Creating entity [items/movable/skull_0040]
+INFO:ArxSceneManager:Creating entity [system/camera_0092]
+INFO:ArxSceneManager:Creating entity [system/marker_0491]
+INFO:ArxSceneManager:Creating entity [system/marker_0492]
+INFO:ArxSceneManager:Creating entity [system/marker_0493]
+INFO:ArxSceneManager:Creating entity [system/marker_0494]
+INFO:ArxSceneManager:Creating entity [system/marker_0495]
+INFO:ArxSceneManager:Creating entity [items/provisions/pole_0014]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0008]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0009]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0010]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0011]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0012]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0013]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0014]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0038]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0039]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0040]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0041]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0042]
+INFO:ArxSceneManager:Creating entity [items/movable/bones_0009]
+INFO:ArxSceneManager:Creating entity [items/movable/skull_0043]
+INFO:ArxSceneManager:Creating entity [items/movable/skull_0044]
+INFO:ArxSceneManager:Creating entity [fix_inter/corpse_0050]
+INFO:ArxSceneManager:Creating entity [fix_inter/corpse_0051]
+INFO:ArxSceneManager:Creating entity [fix_inter/corpse_0052]
+INFO:ArxSceneManager:Creating entity [fix_inter/bridge_rock_0001]
+INFO:ArxSceneManager:Creating entity [system/marker_0498]
+INFO:ArxSceneManager:Creating entity [system/marker_0499]
+INFO:ArxSceneManager:Creating entity [fix_inter/lever_0065]
+INFO:ArxSceneManager:Creating entity [items/magic/fern_0025]
+INFO:ArxSceneManager:Creating entity [items/magic/fern_0026]
+INFO:ArxSceneManager:Creating entity [items/magic/waterlily_0010]
+INFO:ArxSceneManager:Creating entity [items/magic/waterlily_0011]
+INFO:ArxSceneManager:Creating entity [system/marker_0514]
+INFO:ArxSceneManager:Creating entity [system/marker_0381]
+INFO:ArxSceneManager:Creating entity [system/marker_0382]
+INFO:ArxSceneManager:Creating entity [items/magic/rune_aam_0026]
+INFO:ArxSceneManager:Creating entity [system/marker_0569]
+INFO:ArxSceneManager:Creating entity [fix_inter/dragon's_lair_ice_wall_0001]
+INFO:ArxSceneManager:Creating entity [system/marker_0579]
+INFO:ArxSceneManager:Creating entity [system/marker_0580]
+INFO:ArxSceneManager:Creating entity [items/movable/cards_0002]
+INFO:ArxSceneManager:Creating entity [fix_inter/corpse_0058]
+INFO:ArxSceneManager:Creating entity [items/movable/skull_0049]
+INFO:ArxSceneManager:Creating entity [items/movable/bones_0012]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0052]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0053]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0054]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0015]
+INFO:ArxSceneManager:Creating entity [items/magic/snow_drop_0016]
+INFO:ArxSceneManager:Creating entity [items/weapons/long_sword_ciprian_0004]
+INFO:ArxSceneManager:Creating entity [items/special/flute_0002]
+INFO:ArxSceneManager:Creating entity [system/marker_0668]
+INFO:ArxSceneManager:Creating entity [system/marker_0679]
+INFO:ArxSceneManager:Creating entity [system/marker_0680]
+INFO:ArxSceneManager:Creating entity [items/movable/rubbish_0004]
+INFO:ArxSceneManager:Creating entity [items/movable/rubbish_0005]
+INFO:ArxSceneManager:Creating entity [items/movable/rubbish_0013]
+INFO:ArxSceneManager:Creating entity [items/movable/rubble_0007]
+INFO:ArxSceneManager:Creating entity [items/movable/rubble_0008]
+INFO:ArxSceneManager:Creating entity [items/movable/broken_shield_0004]
+INFO:ArxSceneManager:Creating entity [items/movable/broken_stool_0002]
+INFO:ArxSceneManager:Creating entity [items/movable/broken_stool_0003]
+INFO:ArxSceneManager:Creating entity [system/marker_0682]
+INFO:ArxSceneManager:Creating entity [system/camera_0131]
+INFO:ArxSceneManager:Creating entity [system/camera_0132]
+INFO:ArxSceneManager:Creating entity [fix_inter/bridge_rock_fallen_all_0001]
+INFO:ArxSceneManager:Creating entity [npc/rat_base_0093]
+INFO:ArxSceneManager:Creating entity [npc/rat_base_0094]
+INFO:ArxSceneManager:Creating entity [system/marker_0704]
+INFO:ArxSceneManager:Creating entity [items/special/piece_wood_0011]
+INFO:ArxSceneManager:Creating entity [items/special/piece_wood_0012]
+INFO:ArxSceneManager:Creating entity [items/special/piece_wood_0013]
+INFO:ArxSceneManager:Creating entity [items/movable/rubbish_0016]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0057]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0058]
+INFO:ArxSceneManager:Creating entity [system/marker_0748]
+INFO:ArxSceneManager:Creating entity [system/marker_0750]
+INFO:ArxSceneManager:Creating entity [system/marker_0319]
+INFO:ArxSceneManager:Creating entity [items/movable/l2_gobel_chair_01_0004]
+INFO:ArxSceneManager:Creating entity [items/movable/l2_gobel_chair_02_0005]
+INFO:ArxSceneManager:Creating entity [system/marker_0786]
+INFO:ArxSceneManager:Creating entity [npc/hanged_gob_0001]
+INFO:ArxSceneManager:Creating entity [items/provisions/mushroom_0009]
+INFO:ArxSceneManager:Creating entity [items/provisions/mushroom_0010]
+INFO:ArxSceneManager:Creating entity [items/provisions/mushroom_0011]
+INFO:ArxSceneManager:Creating entity [items/provisions/mushroom_0012]
+INFO:ArxSceneManager:Creating entity [items/provisions/mushroom_0013]
+INFO:ArxSceneManager:Creating entity [items/provisions/mushroom_0014]
+INFO:ArxSceneManager:Creating entity [items/provisions/mushroom_0015]
+INFO:ArxSceneManager:Creating entity [items/provisions/mushroom_0016]
+INFO:ArxSceneManager:Creating entity [items/provisions/mushroom_0017]
+INFO:ArxSceneManager:Creating entity [items/provisions/mushroom_0018]
+INFO:ArxSceneManager:Creating entity [items/provisions/mushroom_0019]
+INFO:ArxSceneManager:Creating entity [items/jewelry/gold_coin_0131]
+INFO:ArxSceneManager:Creating entity [items/special/wall_block_0017]
+INFO:ArxSceneManager:Creating entity [system/marker_0811]
+INFO:ArxSceneManager:Creating entity [system/marker_0812]
+INFO:ArxSceneManager:Creating entity [items/special/sausage_0081]
+INFO:ArxSceneManager:Creating entity [system/camera_0147]
+INFO:ArxSceneManager:Creating entity [items/magic/scroll_generic_0032]
+INFO:ArxSceneManager:Creating entity [fix_inter/corpse_0085]
+INFO:ArxSceneManager:Creating entity [items/weapons/short_sword_0030]
+INFO:ArxSceneManager:Creating entity [fix_inter/secret_button_0033]
+INFO:ArxSceneManager:Creating entity [items/movable/flee_marker_0048]
+INFO:ArxSceneManager:Creating entity [items/movable/flee_marker_0049]
+INFO:ArxSceneManager:Creating entity [items/movable/flee_marker_0050]
+INFO:ArxSceneManager:Creating entity [items/movable/jar_0033]
+INFO:ArxSceneManager:Creating entity [items/movable/cuscion_0023]
+INFO:ArxSceneManager:Creating entity [items/movable/cuscion_0024]
+INFO:ArxSceneManager:Creating entity [items/movable/rubbish_0003]
+INFO:ArxSceneManager:Creating entity [items/movable/rubble_0013]
+INFO:ArxSceneManager:Creating entity [items/movable/rubble_0014]
+INFO:ArxSceneManager:Creating entity [items/movable/rubbish_0017]
+INFO:ArxSceneManager:Creating entity [items/movable/rubbish_0018]
+INFO:ArxSceneManager:Creating entity [items/movable/rubble_0015]
+INFO:ArxSceneManager:Creating entity [items/provisions/torch_0025]
+INFO:ArxSceneManager:Creating entity [items/movable/rubbish_0019]
+INFO:ArxSceneManager:Creating entity [items/movable/rubbish_0020]
+INFO:ArxSceneManager:Creating entity [items/movable/rubble_0016]
+INFO:ArxSceneManager:Creating entity [items/movable/rubbish_0021]
+INFO:ArxSceneManager:Creating entity [items/movable/human_gore_0003]
+INFO:ArxSceneManager:Creating entity [items/movable/human_gore02_0004]
+INFO:ArxSceneManager:Creating entity [items/movable/guard_chopped_head_0001]
+INFO:ArxSceneManager:Creating entity [system/marker_0847]
+INFO:ArxSceneManager:Creating entity [system/marker_0849]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0064]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0065]
+INFO:ArxSceneManager:Creating entity [items/movable/skull_0033]
+INFO:ArxSceneManager:Creating entity [items/movable/broken_shield_0005]
+INFO:ArxSceneManager:Creating entity [items/armor/helmet_plate_ac_0004]
+INFO:ArxSceneManager:Creating entity [items/armor/chest_plate_0004]
+INFO:ArxSceneManager:Creating entity [items/armor/legging_plate_0008]
+INFO:ArxSceneManager:Creating entity [items/provisions/backpack_0012]
+INFO:ArxSceneManager:Creating entity [items/weapons/axe_0013]
+INFO:ArxSceneManager:Creating entity [items/magic/scroll_generic_0015]
+INFO:ArxSceneManager:Creating entity [items/magic/scroll_generic_0016]
+INFO:ArxSceneManager:Creating entity [npc/spider_base_0039]
+INFO:ArxSceneManager:Creating entity [fix_inter/corpse_0098]
+INFO:ArxSceneManager:Creating entity [fix_inter/corpse_0099]
+INFO:ArxSceneManager:Creating entity [items/magic/scroll_generic_0017]
+INFO:ArxSceneManager:Creating entity [items/magic/rune_aam_0042]
+INFO:ArxSceneManager:Creating entity [system/marker_0854]
+INFO:ArxSceneManager:Creating entity [system/marker_0882]
+INFO:ArxSceneManager:Creating entity [items/armor/shield_0011]
+INFO:ArxSceneManager:Creating entity [items/armor/shield_0012]
+INFO:ArxSceneManager:Creating entity [fix_inter/floor_bag_0008]
+INFO:ArxSceneManager:Creating entity [items/provisions/bone_0356]
+INFO:ArxSceneManager:Creating entity [items/quest_item/signed_form_0001]
+INFO:ArxSceneManager:Creating entity [items/quest_item/gem_dealer_badge_0015]
+DEBUG:FtsSerializer:Loaded 5336967 bytes from file /home/burner/Desktop/ArxLibertatis/build/game/graph/levels/level1/fast.fts
+DEBUG:FtsSerializer:Header path: C:\ARX\Game\Graph\Levels\Level1\
+DEBUG:FtsSerializer:Header count: 2
+DEBUG:FtsSerializer:Header version: 0.141000
+DEBUG:FtsSerializer:Header uncompressedsize: 11180884
+DEBUG:FtsSerializer:Header2 path: Anchor1.scn
+DEBUG:FtsSerializer:Header2 path: Level_1_portalized.scn
+DEBUG:FtsSerializer:About to unpack from position 1816 (0x718), remaining data: 5335151 bytes
+DEBUG:FtsSerializer:Fts Header version: 0.141000
+DEBUG:FtsSerializer:Fts Header size x,z: 160,160
+DEBUG:FtsSerializer:Fts Header playerpos: 8650.000000,3105.079102,8550.000000
+DEBUG:FtsSerializer:Fts Header Mscenepos: 16250.000000,3105.079102,5550.000000
+DEBUG:FtsSerializer:Fts Header nb_rooms: 52
+DEBUG:FtsSerializer:Loaded 206 textures
+DEBUG:FtsSerializer:Loaded 11180884 bytes of 11180884
+INFO:FtsSerializer:Stored original header: uncompressed=11180884, nb_rooms=52
+INFO:FtsSerializer:Writing FTS file: /home/burner/Desktop/ArxLibertatis/build/game/graph/levels/level1/fast.fts
+INFO:FtsSerializer:Generated FTS binary data: 11180884 bytes
+INFO:FtsSerializer:Size difference from original: 0 bytes (generated: 11180884, expected: 11180884)
+INFO:FtsSerializer:PKWare compressed data: 12578499 bytes
+WARNING:FtsSerializer:Headers truncated from 1040 to 1040 bytes
+INFO:FtsSerializer:Header claims uncompressed size: 11180884
+INFO:FtsSerializer:Exported PKWare compressed FTS: 11180884 → 12578499 bytes
+DEBUG:ArxAddon:unregister
+INFO:ArxAddon:invalidating
+register_class(...):
+Warning: 'ArxFacePanel' does not contain '_PT_' with prefix and suffix
+=== Blender Automation Script ===
+Opening blend file: /home/burner/Desktop/ArxLibertatis/plugins/blender/arx_addon/all models load.blend
+Registering timer to wait for context...
+Found valid window and 3D Viewport context
+Waiting for UI to stabilize...
+Accessing Arx addon...
+Configuring Arx addon preferences...
+Set arxAssetPath to: /home/burner/Desktop/ArxLibertatis/build
+Checking if Arx operators are registered...
+Available operators: ['arx']
+Manually reloading area list...
+Loaded 24 areas
+  Area 0: Area 0 (ID: 0)
+  Area 1: Area 1 (ID: 1)
+  Area 2: Area 2 (ID: 2)
+  Area 3: Area 3 (ID: 3)
+  Area 4: Area 4 (ID: 4)
+  Area 5: Area 5 (ID: 5)
+  Area 6: Area 6 (ID: 6)
+  Area 7: Area 7 (ID: 7)
+  Area 8: Area 8 (ID: 8)
+  Area 9: Area 10 (ID: 10)
+  Area 10: Area 11 (ID: 11)
+  Area 11: Area 12 (ID: 12)
+  Area 12: Area 13 (ID: 13)
+  Area 13: Area 14 (ID: 14)
+  Area 14: Area 15 (ID: 15)
+  Area 15: Area 16 (ID: 16)
+  Area 16: Area 17 (ID: 17)
+  Area 17: Area 18 (ID: 18)
+  Area 18: Area 19 (ID: 19)
+  Area 19: Area 20 (ID: 20)
+  Area 20: Area 21 (ID: 21)
+  Area 21: Area 22 (ID: 22)
+  Area 22: Area 23 (ID: 23)
+  Area 23: Area 24 (ID: 24)
+Manually importing area 1...
+REPORT {'INFO'}: Creating new Area Scene [Area_01]
+DEBUG: Original face 1: vertex 0 = (6959.6552734375, 3117.577392578125, 4209.95458984375)
+DEBUG: Original face 2: vertex 0 = (6959.6552734375, 3117.577392578125, 4209.95458984375)
+DEBUG: Import created 58963 faces from FTS, bmesh has 58963 faces
+DEBUG: Final Blender mesh has 58963 faces (from 58963 bmesh faces)
+DEBUG: Mesh topology - 37713 quads, 21250 triangles
+Area 1 import completed
+Testing TRUE round-trip editing with Blender export...
+Found imported scene: Area_01
+Selected area index: 1 (ID: 1)
+Executing Blender round-trip export...
+DEBUG: Vertex 0: Blender <Vector (695.9655, 420.9955, -311.7578)> → Arx <Vector (6959.6553, 3117.5776, 4209.9546)>
+DEBUG: Vertex 1: Blender <Vector (694.8532, 420.9312, -305.9244)> → Arx <Vector (6948.5322, 3059.2441, 4209.3120)>
+DEBUG: Vertex 2: Blender <Vector (696.8871, 416.2808, -305.5077)> → Arx <Vector (6968.8716, 3055.0771, 4162.8076)>
+DEBUG: Vertex 3: Blender <Vector (697.9689, 415.4125, -311.3411)> → Arx <Vector (6979.6895, 3113.4111, 4154.1250)>
+DEBUG: Blender face 0: room_id=39
+DEBUG: Vertex 0: Blender <Vector (695.9655, 420.9955, -311.7578)> → Arx <Vector (6959.6553, 3117.5776, 4209.9546)>
+DEBUG: Vertex 1: Blender <Vector (697.9689, 415.4125, -311.3411)> → Arx <Vector (6979.6895, 3113.4111, 4154.1250)>
+DEBUG: Vertex 2: Blender <Vector (699.4081, 416.4740, -317.1745)> → Arx <Vector (6994.0815, 3171.7446, 4164.7397)>
+DEBUG: Vertex 3: Blender <Vector (698.3815, 421.7242, -317.1744)> → Arx <Vector (6983.8154, 3171.7441, 4217.2417)>
+DEBUG: Blender face 1: room_id=39
+DEBUG: Blender face 2: room_id=39
+DEBUG: Blender face 3: room_id=39
+DEBUG: Blender face 4: room_id=39
+QUAD/TRIANGLE COUNT: 37713 quads, 21250 triangles, 58963 total faces
+DEBUG: Using scene offset: (16250.0, 3105.0791015625, 5550.0)
+DEBUG: Face 0: room_id=39 → mapped_room=39
+DEBUG: FTS polygon 0: 4 vertices, POLY_QUAD=1
+DEBUG: Face 1: room_id=39 → mapped_room=39
+DEBUG: FTS polygon 1: 4 vertices, POLY_QUAD=1
+DEBUG: Face 2: room_id=39 → mapped_room=39
+DEBUG: FTS polygon 2: 4 vertices, POLY_QUAD=1
+DEBUG: Face 3: room_id=39 → mapped_room=39
+DEBUG: FTS polygon 3: 3 vertices, POLY_QUAD=0
+DEBUG: Face 4: room_id=39 → mapped_room=39
+DEBUG: FTS polygon 4: 4 vertices, POLY_QUAD=1
+DEBUG: Degenerate face 32538: identical vertices detected
+DEBUG: Degenerate face 32541: identical vertices detected
+DEBUG: Degenerate face 38780: identical vertices detected
+DEBUG: Degenerate face 41237: identical vertices detected
+DEBUG: Found 4 degenerate faces out of 58963 total
+DEBUG: Face 1: preserved cell=(69, 41)
+DEBUG: Face 2: preserved cell=(69, 41)
+DEBUG: Face 3: preserved cell=(69, 41)
+DEBUG: Face 4: preserved cell=(69, 41)
+DEBUG: Face 5: preserved cell=(69, 41)
+DEBUG: Processed 58963 faces, 58963 placed in original cells, 58963 total in grid
+Info: Converted 58963 faces from Blender mesh (37713 quads, 21250 triangles)
+Info: Reconstructed cell grid: 58963 polygons in 4967 cells
+Info: Successfully wrote FTS file with 58963 faces
+Info: Successfully exported Area 1 with 58963 faces
+Info: Exported Area 1
+SUCCESS: Blender round-trip export completed!
+=== Blender operations completed successfully ===
+quitting...
+Read blend: "/home/burner/Desktop/ArxLibertatis/plugins/blender/arx_addon/all models load.blend"
+Saved session recovery to "/tmp/quit.blend"
+
+Blender quit
+Step 3: Testing FTS loading with ArxLibertatis...
+  Executing: ./arx --loadlevel 01 -g --skiplogo --noclip
+
+[I] Startup:164           Starting Arx Libertatis 1.3-dev + a770014
+[I] ArxGame:335           Using config file "/home/burner/.config/arx/cfg.ini"
+[I] SDL2Window:191        Using SDL 2.30.0
+[I] SDL2Window:541        Window: X11 r:8 g:8 b:8 a:0 depth:24 aa:8x doublebuffer:1
+[I] OpenGLRenderer:114    Using OpenGL 4.6 (Compatibility Profile) Mesa 25.1.5 - kisak-mesa PPA
+[I] OpenGLRenderer:117     ├─ Vendor: AMD
+[I] OpenGLRenderer:120     ├─ Device: AMD Radeon RX 6600 (radeonsi, navi23, LLVM 19.1.7, DRM 3.57, 6.8.0-62-generic)
+[I] OpenGLRenderer:129     ├─ Context type: debug
+[I] OpenGLRenderer:187     └─ VRAM: 8192 MiB, 7578 MiB free
+[I] GLDebug:99            Application info #1: OpenGL debug output enabled
+[I] ArxGame:1044          Using fullscreen desktop mode 1920x1080@60Hz
+[I] PakReader:574         Loaded PAK "/home/burner/Desktop/ArxLibertatis/build/data.pak"
+[I] PakReader:574         Loaded PAK "/home/burner/Desktop/ArxLibertatis/build/LOC_default.pak"
+[I] PakReader:574         Loaded PAK "/home/burner/Desktop/ArxLibertatis/build/loc.pak"
+[I] PakReader:574         Loaded PAK "/home/burner/Desktop/ArxLibertatis/build/data2.pak"
+[I] PakReader:574         Loaded PAK "/home/burner/Desktop/ArxLibertatis/build/SFX.pak"
+[I] PakReader:574         Loaded PAK "/home/burner/Desktop/ArxLibertatis/build/SPEECH_default.pak"
+[I] PakReader:574         Loaded PAK "/home/burner/Desktop/ArxLibertatis/build/speech.pak"
+[I] PakReader:623         Added dir "/home/burner/Desktop/ArxLibertatis/build/editor"
+[I] PakReader:623         Added dir "/home/burner/Desktop/ArxLibertatis/build/game"
+[I] PakReader:623         Added dir "/home/burner/Desktop/ArxLibertatis/build/Graph"
+[I] PakReader:623         Added dir "/home/burner/Desktop/ArxLibertatis/build/graph"
+[I] PakReader:623         Added dir "/home/burner/Desktop/ArxLibertatis/build/localisation"
+[I] PakReader:623         Added dir "/home/burner/Desktop/ArxLibertatis/build/misc"
+[I] PakReader:623         Added dir "/home/burner/Desktop/ArxLibertatis/build/sfx"
+[I] PakReader:623         Added dir "/home/burner/Desktop/ArxLibertatis/build/speech"
+[I] PakReader:623         Added dir "/home/burner/Desktop/ArxLibertatis/data/core/localisation"
+[I] PakReader:623         Added dir "/home/burner/Desktop/ArxLibertatis/data/core/misc"
+[I] SaveGame:69           Using save game dir "/home/burner/.local/share/arx/save"
+[I] SaveGame:174           ├─ "ass"         2025-07-12  17:42
+[I] SaveGame:174           ├─ "turds"       2025-07-13   3:23
+[I] SaveGame:174           ├─ (quicksave)   2025-07-13   3:23
+[I] SaveGame:174           ├─ (quicksave)   2025-07-13   2:37
+[I] SaveGame:174           └─ "ratz"        2025-07-12  17:43
+[I] OpenALBackend:278     Using OpenAL 1.1 ALSOFT 1.23.1 with EFX 1.0
+[I] OpenALBackend:318      ├─ Vendor: OpenAL Community
+[I] OpenALBackend:322      ├─ Renderer: OpenAL Soft
+[I] OpenALBackend:347      ├─ Device: Scarlett 2i2 4th Gen Analog Stereo
+[I] OpenALBackend:350      └─ HRTF: Disabled
+[I] Localisation:338      Using text language from config: english
+[I] Localisation:355      Using audio language from config: english
+[I] Localisation:231      Loading: xtext_default_001_arxlibertatis.ini
+[I] Localisation:231      Loading: xtext_english_001_arxlibertatis.ini
+[I] ScriptEvent:427       Scripting system initialized with 175 commands and 200 suppressions
+[I] FontCache:167         Using FreeType 2.13.2
+[I] Text:447              Loaded font "misc/arx.ttf" with sizes 90, 49, 31, 63, 34, 34, 34, 14
+[I] ArxGame:798           Initialized Arx Fatalis (full game)
+[I] LoadLevel:232         Loading level "graph/levels/level1/level1.dlf"
+[I] LoadLevel:509         Done loading level
+[I] CinematicLoad:115     Loading cinematic "graph/interface/illustrations/akbaa_dream_c.cin"
+[I] ArxGame:1057          Application window is being destroyed
+[I] ScriptEvent:433       Scripting system shutdown
+[I] ArxGame:937           Clean shutdown
+
+=== Test completed ===
+Script finished. Check the full output in: /home/burner/Desktop/ArxLibertatis/fts_test_output.log

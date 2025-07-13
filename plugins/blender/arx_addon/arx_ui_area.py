@@ -20,7 +20,7 @@ import os
 from bpy.props import IntProperty, BoolProperty, StringProperty, CollectionProperty, PointerProperty, EnumProperty
 from bpy.types import Operator, Panel, PropertyGroup, UIList
 from mathutils import Matrix, Vector, Quaternion
-from .arx_io_util import ArxException, arx_pos_to_blender_for_model, arx_transform_to_blender
+from .arx_io_util import ArxException, arx_pos_to_blender_for_model, arx_transform_to_blender, blender_pos_to_arx
 from .managers import getAddon
 import math
 
@@ -96,6 +96,506 @@ class ArxOperatorImportAllLevels(Operator):
             except ArxException as e:
                 self.report({'ERROR'}, str(e))
                 return {'CANCELLED'}
+        return {'FINISHED'}
+
+class CUSTOM_OT_arx_area_list_export_selected(Operator):
+    bl_idname = "arx.area_list_export_selected"
+    bl_label = "Export Selected Area"
+    bl_description = "Export area background geometry to FTS format"
+    
+    def invoke(self, context, event):
+        area_list = context.window_manager.arx_areas_col
+        if not area_list:
+            self.report({'ERROR'}, "No area list loaded")
+            return {'CANCELLED'}
+            
+        area = area_list[context.window_manager.arx_areas_idx]
+        scene_name = f"Area_{area.area_id:02d}"
+        scene = bpy.data.scenes.get(scene_name)
+        
+        if not scene:
+            self.report({'ERROR'}, f"Scene '{scene_name}' not found. Import the area first.")
+            return {'CANCELLED'}
+        
+        try:
+            self.exportArea(context, scene, area.area_id)
+            self.report({'INFO'}, f"Exported Area {area.area_id}")
+        except ArxException as e:
+            self.report({'ERROR'}, str(e))
+            return {'CANCELLED'}
+        except Exception as e:
+            self.report({'ERROR'}, f"Export failed: {str(e)}")
+            return {'CANCELLED'}
+            
+        return {'FINISHED'}
+    
+    def _map_room_id_to_index(self, room_id):
+        """No room mapping needed - FTS format supports actual room count from data"""
+        return room_id
+    
+    def exportArea(self, context, scene, area_id):
+        """Export area background geometry to FTS format"""
+        addon = getAddon(context)
+        area_files = addon.arxFiles.levels.levels[area_id]
+        
+        if area_files.fts is None:
+            raise ArxException(f"Original FTS file not found for area {area_id}")
+        
+        # Find the background mesh
+        background_obj = None
+        for obj in scene.objects:
+            if obj.name.endswith("-background") and obj.type == 'MESH':
+                background_obj = obj
+                break
+                
+        if not background_obj:
+            raise ArxException(f"No background geometry found in scene {scene.name}")
+        
+        # Read original FTS data to preserve non-geometry data
+        fts_data = addon.sceneManager.ftsSerializer.read_fts_container(area_files.fts)
+        
+        # Convert Blender mesh back to FTS cells
+        self.convertMeshToFtsCells(background_obj, fts_data)
+        
+        # Write back to original FTS file
+        try:
+            self.writeFtsFile(area_files.fts, fts_data, self.converted_faces)
+            self.report({'INFO'}, f"Successfully exported Area {area_id} with {len(self.converted_faces)} faces")
+        except Exception as e:
+            self.report({'ERROR'}, f"FTS write failed: {str(e)}")
+            raise ArxException(f"Export failed: {str(e)}")
+    
+    def convertMeshToFtsCells(self, mesh_obj, fts_data):
+        """Convert Blender mesh back to FTS cell format"""
+        import bmesh
+        
+        # Create bmesh from mesh
+        bm = bmesh.new()
+        bm.from_mesh(mesh_obj.data)
+        bm.faces.ensure_lookup_table()
+        
+        # Get UV and vertex color layers
+        uv_layer = bm.loops.layers.uv.active
+        color_layer = bm.loops.layers.color.active
+        
+        # Get FTS polygon property layers
+        transval_layer = bm.faces.layers.float.get('arx_transval')
+        area_layer = bm.faces.layers.float.get('arx_area')
+        room_layer = bm.faces.layers.int.get('arx_room')
+        polytype_layer = bm.faces.layers.int.get('arx_polytype')
+        
+        # Get preserved geometric data layers
+        norm_layer = bm.faces.layers.float_vector.get('arx_norm')
+        norm2_layer = bm.faces.layers.float_vector.get('arx_norm2')
+        vertex_norms_layer = bm.faces.layers.string.get('arx_vertex_normals')
+        tex_index_layer = bm.faces.layers.int.get('arx_tex_index')
+        
+        # Get preserved cell coordinate layers for exact round-trip
+        cell_x_layer = bm.faces.layers.int.get('arx_cell_x')
+        cell_z_layer = bm.faces.layers.int.get('arx_cell_z')
+        
+        if not uv_layer:
+            raise ArxException("Background mesh missing UV coordinates")
+        if not transval_layer:
+            raise ArxException("Background mesh missing FTS polygon properties. Reimport the level first.")
+        if not cell_x_layer or not cell_z_layer:
+            raise ArxException("Background mesh missing cell coordinate data. Reimport the level first.")
+        
+        # Convert faces back to Arx format
+        converted_faces = []
+        quad_count = 0
+        triangle_count = 0
+        for face in bm.faces:
+            # Convert face vertices back to Arx coordinates
+            arx_vertices = []
+            for loop in face.loops:
+                # Convert position back to Arx coordinates (reverse the 0.1 scaling and coordinate transform)
+                blender_pos = loop.vert.co
+                arx_pos_tuple = blender_pos_to_arx(blender_pos)
+                arx_pos = Vector(arx_pos_tuple) * 10.0  # Reverse 0.1 scale factor
+                
+                # Debug first few vertices
+                if len(converted_faces) < 2 and len(arx_vertices) < 4:
+                    print(f"DEBUG: Vertex {len(arx_vertices)}: Blender {blender_pos} → Arx {arx_pos}")
+                
+                # Get UV coordinates (flip V coordinate back)
+                uv = loop[uv_layer].uv if uv_layer else (0.0, 0.0)
+                arx_uv = (uv[0], 1.0 - uv[1])
+                
+                # Get vertex color if available
+                if color_layer:
+                    color = loop[color_layer]
+                    arx_color = (int(color[0] * 255), int(color[1] * 255), int(color[2] * 255), int(color[3] * 255))
+                else:
+                    arx_color = (255, 255, 255, 255)
+                
+                arx_vertices.append({
+                    'pos': arx_pos,
+                    'uv': arx_uv,
+                    'color': arx_color
+                })
+            
+            # Reverse the vertex order swap that was done during import for quads
+            if len(face.verts) == 4 and len(arx_vertices) == 4:
+                # During import: tempVerts[2], tempVerts[3] = tempVerts[3], tempVerts[2]
+                # So during export, swap them back
+                arx_vertices[2], arx_vertices[3] = arx_vertices[3], arx_vertices[2]
+            
+            # Get preserved geometric data or fallback to Blender-calculated
+            if norm_layer and norm2_layer:
+                # Use preserved original normals
+                arx_normal = Vector(face[norm_layer])
+                arx_normal2 = Vector(face[norm2_layer])
+            else:
+                # Fallback: calculate from Blender geometry
+                blender_normal = face.normal
+                arx_normal = Vector(blender_pos_to_arx(blender_normal))
+                arx_normal2 = arx_normal
+            
+            # Get preserved vertex normals
+            vertex_normals = []
+            if vertex_norms_layer:
+                import struct
+                vertex_norm_data = face[vertex_norms_layer]
+                if len(vertex_norm_data) >= 36:  # 4 normals × 3 floats × 4 bytes = 48 bytes
+                    for i in range(4):
+                        offset = i * 12  # 3 floats × 4 bytes
+                        x, y, z = struct.unpack('<fff', vertex_norm_data[offset:offset+12])
+                        vertex_normals.append(Vector((x, y, z)))
+            
+            # Fallback if not enough vertex normals preserved
+            while len(vertex_normals) < 4:
+                vertex_normals.append(arx_normal)
+            
+            # Get stored FTS properties
+            transval = face[transval_layer] if transval_layer else 0.0
+            stored_area = face[area_layer] if area_layer else face.calc_area()
+            room_id = face[room_layer] if room_layer else 0
+            poly_type = face[polytype_layer] if polytype_layer else 0
+            tex_index = face[tex_index_layer] if tex_index_layer else face.material_index
+            
+            # Get preserved cell coordinates 
+            cell_x = face[cell_x_layer] if cell_x_layer else 0
+            cell_z = face[cell_z_layer] if cell_z_layer else 0
+            
+            # Debug: log room values from Blender face data
+            if len(converted_faces) < 5:
+                print(f"DEBUG: Blender face {len(converted_faces)}: room_id={room_id}")
+            
+            # Count quad vs triangle faces
+            is_quad = len(face.verts) == 4
+            if is_quad:
+                quad_count += 1
+            else:
+                triangle_count += 1
+            
+            # Build complete FTS polygon data structure using preserved geometric data
+            fts_polygon = {
+                'vertices': arx_vertices,
+                'material_index': face.material_index,
+                'is_quad': is_quad,
+                # FTS-specific polygon properties (preserved from original)
+                'transval': transval,
+                'area': stored_area,  # Use preserved area value
+                'room': room_id,
+                'poly_type': poly_type,
+                'norm': arx_normal,
+                'norm2': arx_normal2,  # Use preserved secondary normal
+                'vertex_normals': vertex_normals[:4],  # Use preserved per-vertex normals
+                'tex': tex_index,  # Use preserved texture index
+                # Preserved cell coordinates for exact placement
+                'cell_x': cell_x,
+                'cell_z': cell_z
+            }
+            
+            converted_faces.append(fts_polygon)
+        
+        # Store converted data for potential FTS writing
+        # NOTE: This doesn't actually update fts_data.cells yet - that requires 
+        # implementing the full FTS write functionality
+        self.converted_faces = converted_faces
+        
+        print(f"QUAD/TRIANGLE COUNT: {quad_count} quads, {triangle_count} triangles, {len(converted_faces)} total faces")
+        self.report({'INFO'}, f"Converted {len(converted_faces)} faces from Blender mesh ({quad_count} quads, {triangle_count} triangles)")
+        
+        bm.free()
+    
+    def writeFtsFile(self, fts_path, original_fts_data, converted_faces):
+        """Write FTS file with updated background geometry"""
+        if len(converted_faces) == 0:
+            raise ArxException("No faces to export")
+        
+        # Validate FTS properties
+        self._validateFtsProperties(converted_faces)
+        
+        # Convert faces back to FTS polygon structures  
+        updated_cells = self._reconstructCellGrid(converted_faces, original_fts_data)
+        
+        # Write FTS file using the serializer  
+        import bpy
+        addon = getAddon(bpy.context)
+        fts_serializer = addon.sceneManager.ftsSerializer
+        
+        try:
+            fts_serializer.write_fts_container(fts_path, original_fts_data, updated_cells)
+            self.report({'INFO'}, f"Successfully wrote FTS file with {len(converted_faces)} faces")
+        except Exception as e:
+            raise ArxException(f"FTS write failed: {str(e)}")
+    
+    def _validateFtsProperties(self, converted_faces):
+        """Validate that converted faces have required FTS properties"""
+        required_props = ['transval', 'area', 'room', 'poly_type', 'vertices']
+        missing_props = []
+        
+        for i, face in enumerate(converted_faces[:5]):  # Check first 5 faces
+            for prop in required_props:
+                if prop not in face:
+                    missing_props.append(prop)
+        
+        if missing_props:
+            raise ArxException(f"Missing required FTS properties: {set(missing_props)}")
+    
+    def _reconstructCellGrid(self, converted_faces, original_fts_data):
+        """Reconstruct FTS cell grid from converted face data with spatial partitioning"""
+        from .dataFts import FAST_EERIEPOLY, FAST_VERTEX
+        from .dataCommon import SavedVec3, PolyTypeFlag
+        import math
+        
+        # Get scene offset for proper cell grid alignment
+        scene_offset = original_fts_data.sceneOffset
+        print(f"DEBUG: Using scene offset: {scene_offset}")
+        
+        # Create FAST_EERIEPOLY structures from converted faces
+        fts_polygons = []
+        degenerate_faces = 0
+        
+        for face_data in converted_faces:
+            poly = FAST_EERIEPOLY()
+            
+            # Set vertices (up to 4) - preserve original vertex count for proper geometry
+            vertices = face_data['vertices']
+            num_verts = len(vertices)
+            
+            # Check for degenerate geometry
+            is_degenerate = False
+            if num_verts >= 3:
+                # Check if any vertices are identical (would create degenerate face)
+                for i in range(num_verts):
+                    for j in range(i + 1, num_verts):
+                        v1 = vertices[i]['pos']
+                        v2 = vertices[j]['pos']
+                        # Check if positions are nearly identical
+                        if abs(v1[0] - v2[0]) < 0.001 and abs(v1[1] - v2[1]) < 0.001 and abs(v1[2] - v2[2]) < 0.001:
+                            is_degenerate = True
+                            break
+                    if is_degenerate:
+                        break
+            
+            if is_degenerate:
+                degenerate_faces += 1
+                if degenerate_faces <= 5:
+                    print(f"DEBUG: Degenerate face {len(fts_polygons)}: identical vertices detected")
+            
+            for i in range(4):
+                if i < num_verts:
+                    vert = vertices[i]
+                    poly.v[i].ssx = vert['pos'][0]
+                    poly.v[i].sy = vert['pos'][1] 
+                    poly.v[i].ssz = vert['pos'][2]
+                    poly.v[i].stu = vert['uv'][0]
+                    poly.v[i].stv = vert['uv'][1]
+                else:
+                    # For triangles, duplicate the last vertex to make a degenerate quad
+                    # This preserves the triangle geometry while fitting FTS quad format
+                    if vertices:
+                        vert = vertices[-1]  # Use last vertex
+                        poly.v[i].ssx = vert['pos'][0]
+                        poly.v[i].sy = vert['pos'][1]
+                        poly.v[i].ssz = vert['pos'][2]
+                        poly.v[i].stu = vert['uv'][0]
+                        poly.v[i].stv = vert['uv'][1]
+            
+            # Set polygon properties
+            poly.tex = face_data.get('tex', 0)
+            poly.transval = face_data.get('transval', 0.0)
+            poly.area = face_data.get('area', 1.0)
+            # Map room ID to room index (room IDs 1-42 → room indices 0-7)
+            room_id = face_data.get('room', 0)
+            mapped_room = self._map_room_id_to_index(room_id)
+            poly.room = mapped_room
+            
+            # Debug: log room mapping for first few faces
+            if len(fts_polygons) < 5:
+                print(f"DEBUG: Face {len(fts_polygons)}: room_id={room_id} → mapped_room={mapped_room}")
+            
+            # Set normals
+            norm = face_data.get('norm', [0, 1, 0])
+            poly.norm.x, poly.norm.y, poly.norm.z = norm
+            poly.norm2.x, poly.norm2.y, poly.norm2.z = norm
+            
+            # Set vertex normals 
+            vertex_norms = face_data.get('vertex_normals', [norm] * 4)
+            for i in range(4):
+                if i < len(vertex_norms):
+                    vnorm = vertex_norms[i]
+                    poly.nrml[i].x, poly.nrml[i].y, poly.nrml[i].z = vnorm
+                else:
+                    poly.nrml[i].x, poly.nrml[i].y, poly.nrml[i].z = norm
+            
+            # Set poly type flags - ensure POLY_QUAD flag matches actual vertex count
+            poly_type = face_data.get('poly_type', 0)
+            
+            # Create PolyTypeFlag and set POLY_QUAD based on actual vertex count
+            from .dataCommon import PolyTypeFlag
+            poly.type = PolyTypeFlag()
+            poly.type.asUInt = poly_type
+            
+            # Override POLY_QUAD flag based on actual geometry
+            if num_verts == 4:
+                poly.type.POLY_QUAD = True
+            else:
+                poly.type.POLY_QUAD = False  # Triangle
+            
+            # Debug: log polygon type for first few faces
+            if len(fts_polygons) < 5:
+                print(f"DEBUG: FTS polygon {len(fts_polygons)}: {num_verts} vertices, POLY_QUAD={poly.type.POLY_QUAD}")
+            
+            fts_polygons.append((poly, face_data))
+        
+        if degenerate_faces > 0:
+            print(f"DEBUG: Found {degenerate_faces} degenerate faces out of {len(fts_polygons)} total")
+        
+        # Initialize 160x160 cell grid
+        updated_cells = [[None for _ in range(160)] for _ in range(160)]
+        
+        # Use preserved cell coordinates for exact placement (no spatial calculation needed)
+        faces_processed = 0
+        faces_placed = 0
+        for poly, face_data in fts_polygons:
+            faces_processed += 1
+            
+            # Get preserved cell coordinates
+            cell_x = face_data.get('cell_x', 0)
+            cell_z = face_data.get('cell_z', 0)
+            
+            # Debug first few faces
+            if faces_processed <= 5:
+                print(f"DEBUG: Face {faces_processed}: preserved cell=({cell_x}, {cell_z})")
+            
+            # Validate cell coordinates
+            if 0 <= cell_x < 160 and 0 <= cell_z < 160:
+                # Add polygon to its original cell
+                if updated_cells[cell_z][cell_x] is None:
+                    updated_cells[cell_z][cell_x] = []
+                updated_cells[cell_z][cell_x].append(poly)
+                faces_placed += 1
+            else:
+                print(f"ERROR: Invalid preserved cell coordinates ({cell_x}, {cell_z}) for face {faces_processed}")
+        
+        # Count populated cells
+        populated_cells = sum(1 for z in range(160) for x in range(160) if updated_cells[z][x] is not None)
+        total_polys = sum(len(updated_cells[z][x]) for z in range(160) for x in range(160) if updated_cells[z][x] is not None)
+        
+        print(f"DEBUG: Processed {faces_processed} faces, {faces_placed} placed in original cells, {total_polys} total in grid")
+        self.report({'INFO'}, f"Reconstructed cell grid: {total_polys} polygons in {populated_cells} cells")
+        
+        return updated_cells
+
+class CUSTOM_OT_arx_view_face_attributes(Operator):
+    bl_idname = "arx.view_face_attributes"
+    bl_label = "View Face Attributes"
+    bl_description = "Show FTS polygon properties for selected faces"
+    
+    def execute(self, context):
+        obj = context.active_object
+        if not obj or obj.type != 'MESH':
+            self.report({'ERROR'}, "Select a mesh object")
+            return {'CANCELLED'}
+        
+        if not obj.data.polygons:
+            self.report({'ERROR'}, "Mesh has no faces")
+            return {'CANCELLED'}
+        
+        # Check for FTS attribute layers
+        mesh = obj.data
+        has_transval = 'arx_transval' in mesh.attributes
+        has_area = 'arx_area' in mesh.attributes  
+        has_room = 'arx_room' in mesh.attributes
+        has_polytype = 'arx_polytype' in mesh.attributes
+        
+        if not (has_transval or has_area or has_room or has_polytype):
+            self.report({'ERROR'}, "No FTS face attributes found. Reimport the level to get polygon properties.")
+            return {'CANCELLED'}
+        
+        import bmesh
+        bm = bmesh.new()
+        bm.from_mesh(mesh)
+        bm.faces.ensure_lookup_table()
+        
+        # Get attribute layers
+        transval_layer = bm.faces.layers.float.get('arx_transval') if has_transval else None
+        area_layer = bm.faces.layers.float.get('arx_area') if has_area else None
+        room_layer = bm.faces.layers.int.get('arx_room') if has_room else None
+        polytype_layer = bm.faces.layers.int.get('arx_polytype') if has_polytype else None
+        
+        # Collect statistics
+        stats = {
+            'total_faces': len(bm.faces),
+            'transval_values': [],
+            'area_values': [],
+            'room_values': [],
+            'polytype_values': []
+        }
+        
+        for face in bm.faces:
+            if transval_layer: stats['transval_values'].append(face[transval_layer])
+            if area_layer: stats['area_values'].append(face[area_layer])
+            if room_layer: stats['room_values'].append(face[room_layer])
+            if polytype_layer: stats['polytype_values'].append(face[polytype_layer])
+        
+        # Show selected faces in detail (up to 10)
+        selected_faces = [f for f in bm.faces if f.select]
+        if not selected_faces:
+            # If no faces selected, show first 5
+            selected_faces = bm.faces[:5]
+            self.report({'INFO'}, "No faces selected, showing first 5 faces")
+        
+        # Print detailed face info to console
+        print("\n" + "="*60)
+        print(f"FTS FACE ATTRIBUTES for {obj.name}")
+        print("="*60)
+        print(f"Total faces: {stats['total_faces']}")
+        
+        if has_transval:
+            vals = stats['transval_values']
+            print(f"TransVal: min={min(vals):.3f}, max={max(vals):.3f}, unique={len(set(vals))}")
+        if has_area:
+            vals = stats['area_values'] 
+            print(f"Area: min={min(vals):.3f}, max={max(vals):.3f}, unique={len(set(vals))}")
+        if has_room:
+            vals = stats['room_values']
+            print(f"Room: min={min(vals)}, max={max(vals)}, unique={len(set(vals))}")
+        if has_polytype:
+            vals = stats['polytype_values']
+            print(f"PolyType: min={min(vals)}, max={max(vals)}, unique={len(set(vals))}")
+        
+        print(f"\nDetailed view of {len(selected_faces)} faces:")
+        print("-" * 60)
+        
+        for i, face in enumerate(selected_faces[:10]):  # Limit to 10 faces
+            print(f"Face {face.index}:")
+            if transval_layer: print(f"  TransVal: {face[transval_layer]:.6f}")
+            if area_layer: print(f"  Area: {face[area_layer]:.6f}")  
+            if room_layer: print(f"  Room: {face[room_layer]}")
+            if polytype_layer: 
+                ptype = face[polytype_layer]
+                print(f"  PolyType: {ptype} (0x{ptype:08x})")
+        
+        print("="*60 + "\n")
+        
+        bm.free()
+        
+        self.report({'INFO'}, f"Face attributes shown in console. Found {stats['total_faces']} faces.")
         return {'FINISHED'}
 
 class ArxAnimationTestProperties(PropertyGroup):
@@ -383,6 +883,8 @@ classes = (
     ARX_area_properties,
     SCENE_UL_arx_area_list,
     CUSTOM_OT_arx_area_list_import_selected,
+    CUSTOM_OT_arx_area_list_export_selected,
+    CUSTOM_OT_arx_view_face_attributes,
     ArxOperatorImportAllLevels,
     ArxAnimationTestProperties,
     ArxModelListProperties,
