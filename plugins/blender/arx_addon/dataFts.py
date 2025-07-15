@@ -205,8 +205,17 @@ class FtsSerializer(object):
         sceneOffset = (ftsHeader.Mscenepos.x, ftsHeader.Mscenepos.y, ftsHeader.Mscenepos.z)
 
         texturesType = FAST_TEXTURE_CONTAINER * ftsHeader.nb_textures
-        textures = texturesType.from_buffer_copy(data, pos)
+        textures_array = texturesType.from_buffer_copy(data, pos)
         pos += sizeof(texturesType)
+        # Convert ctypes structures to Python dicts to avoid pickle issues
+        textures = []
+        for tex in textures_array:
+            texture_dict = {
+                'tc': tex.tc,
+                'temp': tex.temp,
+                'fic': bytes(tex.fic)  # Convert to bytes for pickle safety
+            }
+            textures.append(texture_dict)
         self.log.debug("Loaded %i textures" % len(textures))
 
         #for i in textures:
@@ -249,42 +258,61 @@ class FtsSerializer(object):
             pos += sizeof(FAST_ANCHOR_DATA)
             
             if anchor.nb_linked > 0:
-                LinkedAnchorsArrayType = c_int32 * anchor.nb_linked
+                nb_linked = int(anchor.nb_linked)  # Ensure it's an integer
+                LinkedAnchorsArrayType = c_int32 * nb_linked
                 linked = LinkedAnchorsArrayType.from_buffer_copy(data, pos)
                 pos += sizeof(LinkedAnchorsArrayType)
-                anchors.append( ((anchor.pos.x, anchor.pos.y, anchor.pos.z), linked, anchor.radius, anchor.height, anchor.flags) )
+                # Convert ctypes array to Python list to avoid pickle issues
+                linked_list = [int(linked[i]) for i in range(nb_linked)]
+                anchors.append( ((float(anchor.pos.x), float(anchor.pos.y), float(anchor.pos.z)), linked_list, float(anchor.radius), float(anchor.height), int(anchor.flags)) )
             else:
-                anchors.append( ((anchor.pos.x, anchor.pos.y, anchor.pos.z), [], anchor.radius, anchor.height, anchor.flags) )
+                anchors.append( ((float(anchor.pos.x), float(anchor.pos.y), float(anchor.pos.z)), [], float(anchor.radius), float(anchor.height), int(anchor.flags)) )
         
         portals = []
         for i in range(ftsHeader.nb_portals):
             portal = EERIE_SAVE_PORTALS.from_buffer_copy(data, pos)
             pos += sizeof(EERIE_SAVE_PORTALS)
-            portals.append(portal)
+            # Convert to binary data for pickle safety
+            portals.append(bytes(portal))
 
-        # Read room data structures 
+        # Read room data structures and convert to Python data
         room_data = []
         for i in range(ftsHeader.nb_rooms + 1): # Off by one in data
             room = EERIE_SAVE_ROOM_DATA.from_buffer_copy(data, pos)
             pos += sizeof(EERIE_SAVE_ROOM_DATA)
+            
+            # Convert room info to Python dict
+            room_info_dict = {
+                'nb_portals': room.nb_portals,
+                'nb_polys': room.nb_polys,
+                'padd': [room.padd[j] for j in range(6)]  # Convert ctypes array to Python list
+            }
             
             room_portal_indices = []
             if room.nb_portals > 0:
                 PortalsArrayType = c_int32 * room.nb_portals
                 portals2 = PortalsArrayType.from_buffer_copy(data, pos)
                 pos += sizeof(PortalsArrayType)
-                room_portal_indices = list(portals2)
+                room_portal_indices = list(portals2)  # This creates Python ints, not ctypes
                 
             room_poly_refs = []
             if room.nb_polys > 0:
                 PolysArrayType = FAST_EP_DATA * room.nb_polys
                 polys2 = PolysArrayType.from_buffer_copy(data, pos)
                 pos += sizeof(PolysArrayType)
-                room_poly_refs = list(polys2)
+                # Convert to Python dicts instead of ctypes
+                for poly_ref in polys2:
+                    poly_dict = {
+                        'px': poly_ref.px,
+                        'py': poly_ref.py,
+                        'idx': poly_ref.idx,
+                        'padd': poly_ref.padd
+                    }
+                    room_poly_refs.append(poly_dict)
             
-            room_data.append((room, room_portal_indices, room_poly_refs))
+            room_data.append((room_info_dict, room_portal_indices, room_poly_refs))
         
-        # Read room distance matrix (size is (nb_rooms + 1) x (nb_rooms + 1))
+        # Read room distance matrix and convert to binary data
         room_distances = []
         distance_matrix_size = ftsHeader.nb_rooms + 1
         for i in range(distance_matrix_size):
@@ -292,7 +320,8 @@ class FtsSerializer(object):
             for j in range(distance_matrix_size):
                 dist = ROOM_DIST_DATA_SAVE.from_buffer_copy(data, pos)
                 pos += sizeof(ROOM_DIST_DATA_SAVE)
-                row.append(dist)
+                # Convert to binary data for pickle safety
+                row.append(bytes(dist))
             room_distances.append(row)
                 
         self.log.debug("Loaded %i bytes of %i" % (pos, len(data)))
@@ -569,9 +598,18 @@ class FtsSerializer(object):
         data = bytearray()
         data.extend(bytes(header))
         
-        # Write textures
+        # Write textures - handle both ctypes and dict formats
         for tex in fts_data.textures:
-            data.extend(bytes(tex))
+            if isinstance(tex, dict):
+                # Convert dict to ctypes for serialization
+                texture_struct = FAST_TEXTURE_CONTAINER()
+                texture_struct.tc = tex['tc']
+                texture_struct.temp = tex['temp']
+                texture_struct.fic = tex['fic']
+                data.extend(bytes(texture_struct))
+            else:
+                # Original ctypes structure
+                data.extend(bytes(tex))
         
         # Write cells in correct order: Y (Z) rows, then X columns (row-major)
         # This matches the C++ loading order: for(z=0; z<sizez; z++) for(x=0; x<sizex; x++)
@@ -603,7 +641,55 @@ class FtsSerializer(object):
                 # Write polygons in this cell
                 if cell is not None:
                     for poly in cell:
-                        data.extend(bytes(poly))
+                        if isinstance(poly, dict):
+                            # Convert dict to ctypes for serialization
+                            poly_struct = FAST_EERIEPOLY()
+                            
+                            # Set vertices
+                            for i in range(4):
+                                if i < len(poly['vertices']):
+                                    vert = poly['vertices'][i]
+                                    poly_struct.v[i].ssx = vert['ssx']
+                                    poly_struct.v[i].sy = vert['sy']
+                                    poly_struct.v[i].ssz = vert['ssz']
+                                    poly_struct.v[i].stu = vert['stu']
+                                    poly_struct.v[i].stv = vert['stv']
+                            
+                            # Set polygon properties
+                            poly_struct.tex = poly['tex']
+                            poly_struct.transval = poly['transval']
+                            poly_struct.area = poly['area']
+                            poly_struct.room = poly['room']
+                            
+                            # Set normals
+                            norm = poly['norm']
+                            poly_struct.norm.x = norm['x']
+                            poly_struct.norm.y = norm['y']
+                            poly_struct.norm.z = norm['z']
+                            
+                            norm2 = poly['norm2']
+                            poly_struct.norm2.x = norm2['x']
+                            poly_struct.norm2.y = norm2['y']
+                            poly_struct.norm2.z = norm2['z']
+                            
+                            # Set vertex normals
+                            for i in range(4):
+                                if i < len(poly['vertex_normals']):
+                                    vnorm = poly['vertex_normals'][i]
+                                    poly_struct.nrml[i].x = vnorm['x']
+                                    poly_struct.nrml[i].y = vnorm['y']
+                                    poly_struct.nrml[i].z = vnorm['z']
+                            
+                            # Set polygon type
+                            from .dataCommon import PolyTypeFlag
+                            poly_struct.type = PolyTypeFlag()
+                            poly_struct.type.asUInt = poly['poly_type']
+                            poly_struct.type.POLY_QUAD = poly['is_quad']
+                            
+                            data.extend(bytes(poly_struct))
+                        else:
+                            # Original ctypes structure
+                            data.extend(bytes(poly))
                 
                 # Write anchor indices for this cell (preserve original data)
                 for anchor_idx in cell_anchor_indices:
@@ -629,9 +715,14 @@ class FtsSerializer(object):
             for link in anchor_links:
                 data.extend(struct.pack('<i', link))  # s32 not s16
         
-        # Write portals (preserve original room indices)
+        # Write portals - handle both ctypes and binary data
         for portal in fts_data.portals:
-            data.extend(bytes(portal))
+            if isinstance(portal, bytes):
+                # Binary data from scene properties
+                data.extend(portal)
+            else:
+                # Original ctypes structure
+                data.extend(bytes(portal))
         
         # Write preserved room data structures
         nb_rooms = header.nb_rooms
@@ -641,7 +732,18 @@ class FtsSerializer(object):
             
             # Write room structures and their portal/polygon references
             for room_info, room_portal_indices, room_poly_refs in room_data_list:
-                data.extend(bytes(room_info))
+                # Handle both ctypes structures and dict-based structures
+                if isinstance(room_info, dict):
+                    # Create ctypes structure from dict for serialization
+                    room_data_struct = EERIE_SAVE_ROOM_DATA()
+                    room_data_struct.nb_portals = room_info['nb_portals']
+                    room_data_struct.nb_polys = room_info['nb_polys']
+                    for i in range(6):
+                        room_data_struct.padd[i] = room_info['padd'][i]
+                    data.extend(bytes(room_data_struct))
+                else:
+                    # Original ctypes structure
+                    data.extend(bytes(room_info))
                 
                 # Write portal indices for this room
                 for portal_idx in room_portal_indices:
@@ -649,12 +751,27 @@ class FtsSerializer(object):
                 
                 # Write polygon references for this room  
                 for poly_ref in room_poly_refs:
-                    data.extend(bytes(poly_ref))
+                    if isinstance(poly_ref, dict):
+                        # Create ctypes structure from dict for serialization
+                        ep_data_struct = FAST_EP_DATA()
+                        ep_data_struct.px = poly_ref['px']
+                        ep_data_struct.py = poly_ref['py']
+                        ep_data_struct.idx = poly_ref['idx']
+                        ep_data_struct.padd = poly_ref['padd']
+                        data.extend(bytes(ep_data_struct))
+                    else:
+                        # Original ctypes structure
+                        data.extend(bytes(poly_ref))
             
-            # Write preserved room distance matrix
+            # Write preserved room distance matrix - handle binary data
             for row in room_distances:
                 for dist_info in row:
-                    data.extend(bytes(dist_info))
+                    if isinstance(dist_info, bytes):
+                        # Binary data from scene properties
+                        data.extend(dist_info)
+                    else:
+                        # Original ctypes structure
+                        data.extend(bytes(dist_info))
         else:
             # Fallback: create empty room data (shouldn't happen with preserved data)
             for room_id in range(nb_rooms + 1):  # Off-by-one in original data

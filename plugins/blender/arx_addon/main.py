@@ -81,7 +81,20 @@ class ArxLevelsPanel(bpy.types.Panel):
             layout.template_list("SCENE_UL_arx_area_list", "", context.window_manager, "arx_areas_col", context.window_manager, "arx_areas_idx")
             row = layout.row()
             row.operator("arx.area_list_import_selected")
-            row.operator("arx.area_list_export_selected")
+            
+            # Export section
+            layout.separator()
+            layout.label(text="Export Area Data:")
+            
+            # Individual export buttons
+            col = layout.column(align=True)
+            col.operator("arx.area_export_fts", text="Export FTS (Geometry)")
+            col.operator("arx.area_export_llf", text="Export LLF (Lighting)")
+            col.operator("arx.area_export_dlf", text="Export DLF (Entities/Zones)")
+            
+            # All export button
+            layout.separator()
+            layout.operator("arx.area_list_export_all", text="Export All Area Data")
             layout.operator("arx.view_face_attributes", text="View Face Attributes")
 
 class ArxOperatorTestModelExport(bpy.types.Operator):

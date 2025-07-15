@@ -68,11 +68,17 @@ class ArxSceneManager(object):
         mappedMaterials = []
         idx = 0
         for tex in ftsData.textures:
-            mappedMaterials.append((idx, tex.tc, createMaterial(self.dataPath, tex.fic.decode('iso-8859-1'))))
+            if isinstance(tex, dict):
+                tc_value = tex['tc']
+                fic_path = tex['fic'].decode('iso-8859-1')
+            else:
+                tc_value = tex.tc
+                fic_path = tex.fic.decode('iso-8859-1')
+            mappedMaterials.append((idx, tc_value, createMaterial(self.dataPath, fic_path)))
             idx += 1
 
         # Create mesh preserving quads
-        bm = self.AddSceneBackground(ftsData.cells, llfData.levelLighting, mappedMaterials)
+        bm, total_faces_imported = self.AddSceneBackground(ftsData.cells, llfData.levelLighting, mappedMaterials)
         mesh = bpy.data.meshes.new(scene.name + "-mesh")
         
         # Ensure bmesh face indices are valid before conversion
@@ -103,10 +109,23 @@ class ArxSceneManager(object):
         for idx, tcId, mat in mappedMaterials:
             obj.data.materials.append(mat)
 
+        # Store complete original FTS data in scene for export persistence  
+        self._storeOriginalFtsDataInScene(scene, ftsData)
+        
+        # Store original face count for geometry modification detection
+        scene["arx_original_face_count"] = total_faces_imported
+        
         self.AddScenePathfinderAnchors(scene, ftsData.anchors)
         self.AddScenePortals(scene, ftsData)
         self.AddSceneLights(scene, llfData, ftsData.sceneOffset)
         self.AddSceneObjects(scene, dlfData, ftsData.sceneOffset)
+        
+        # Add new DLF content as editable Blender objects
+        self.AddScenePaths(scene, dlfData, ftsData.sceneOffset)
+        self.AddSceneZones(scene, dlfData, ftsData.sceneOffset)
+        self.AddSceneFogs(scene, dlfData, ftsData.sceneOffset)
+        self.AddSceneDlfLights(scene, dlfData, ftsData.sceneOffset)
+        
         self.add_scene_map_camera(scene)
 
     def AddSceneBackground(self, cells, levelLighting, mappedMaterials):
@@ -219,7 +238,7 @@ class ArxSceneManager(object):
         #bm.transform(correctionMatrix)
         
         print(f"DEBUG: Import created {total_faces_imported} faces from FTS, bmesh has {len(bm.faces)} faces")
-        return bm
+        return bm, total_faces_imported
     
     def AddScenePathfinderAnchors(self, scene, anchors):
         
@@ -252,8 +271,15 @@ class ArxSceneManager(object):
         portals_col = bpy.data.collections.new(scene.name + '-portals')
         scene.collection.children.link(portals_col)
 
-        for portal in data.portals:
+        for portal_data in data.portals:
             bm = bmesh.new()
+
+            # Convert portal from binary data back to ctypes if needed
+            if isinstance(portal_data, bytes):
+                from .dataFts import EERIE_SAVE_PORTALS
+                portal = EERIE_SAVE_PORTALS.from_buffer_copy(portal_data)
+            else:
+                portal = portal_data
 
             tempVerts = []
             for vertex in portal.poly.v:
@@ -275,6 +301,15 @@ class ArxSceneManager(object):
             obj = bpy.data.objects.new(scene.name + '-portal', mesh)
             obj.display_type = 'WIRE'
             obj.display.show_shadows = False
+            
+            # Store portal room connections as custom properties
+            if hasattr(portal, 'room_1'):
+                obj["arx_room_1"] = portal.room_1
+            if hasattr(portal, 'room_2'):
+                obj["arx_room_2"] = portal.room_2
+            if hasattr(portal, 'useportal'):
+                obj["arx_useportal"] = portal.useportal
+            
             # obj.show_x_ray = True
             # obj.hide = True
             #obj.parent_type = 'OBJECT'
@@ -310,7 +345,7 @@ class ArxSceneManager(object):
             objectId = '/'.join(legacyPath[legacyPath.index('interactive') + 1 : -1])
 
             entityId = objectId + "_" + str(e.ident).zfill(4)
-            self.log.info("Creating entity [{}]".format(entityId))
+            #self.log.info("Creating entity [{}]".format(entityId))
 
             proxyObject = bpy.data.objects.new(name='e:' + entityId, object_data=None)
             entities_col.objects.link(proxyObject)
@@ -365,6 +400,109 @@ class ArxSceneManager(object):
         scene.render.engine = 'BLENDER_EEVEE_NEXT'
         scene.render.resolution_x = 1000
         scene.render.resolution_y = 1000
+    
+    def _storeOriginalFtsDataInScene(self, scene, fts_data):
+        """Store complete original FTS data in scene custom properties for persistence across save/load"""
+        import pickle
+        print("DEBUG: Storing complete original FTS data in scene properties")
+        
+        try:
+            # Store scene offset
+            scene["arx_scene_offset"] = fts_data.sceneOffset
+            
+            # Store textures as serialized data  
+            texture_data = []
+            for tex in fts_data.textures:
+                if isinstance(tex, dict):
+                    # Already in dict format - ensure fic is bytes
+                    fic_data = tex['fic']
+                    if isinstance(fic_data, str):
+                        fic_data = fic_data.encode('iso-8859-1')
+                    elif not isinstance(fic_data, bytes):
+                        fic_data = bytes(fic_data)
+                    
+                    texture_data.append({
+                        'tc': int(tex['tc']),
+                        'temp': int(tex['temp']),
+                        'fic': fic_data
+                    })
+                else:
+                    # Convert ctypes to dict
+                    fic_data = tex.fic
+                    if isinstance(fic_data, str):
+                        fic_data = fic_data.encode('iso-8859-1')
+                    elif hasattr(fic_data, '__array_interface__') or hasattr(fic_data, '__iter__'):
+                        fic_data = bytes(fic_data)
+                    else:
+                        fic_data = str(fic_data).encode('iso-8859-1')
+                    
+                    texture_data.append({
+                        'tc': int(tex.tc),
+                        'temp': int(tex.temp),
+                        'fic': fic_data  # Ensure bytes format
+                    })
+            print(f"DEBUG: Stored {len(texture_data)} textures")
+            scene["arx_texture_data"] = pickle.dumps(texture_data)
+            
+            # Store anchors - convert ctypes arrays to lists
+            anchor_data = []
+            for anchor in fts_data.anchors:
+                if len(anchor) >= 5:  # New format with preserved data
+                    anchor_pos, anchor_links, radius, height, flags = anchor
+                    # Convert ctypes array to list if needed
+                    link_list = list(anchor_links) if hasattr(anchor_links, '__iter__') else anchor_links
+                    anchor_data.append((anchor_pos, link_list, radius, height, flags))
+                else:  # Old format fallback
+                    anchor_pos, anchor_links = anchor[:2]
+                    link_list = list(anchor_links) if hasattr(anchor_links, '__iter__') else anchor_links
+                    anchor_data.append((anchor_pos, link_list))
+            scene["arx_anchor_data"] = pickle.dumps(anchor_data)
+            
+            # Store cell anchors - convert any ctypes arrays to lists
+            cell_anchor_data = []
+            for z_row in fts_data.cell_anchors:
+                z_row_data = []
+                for cell_anchors in z_row:
+                    if cell_anchors is not None:
+                        z_row_data.append(list(cell_anchors) if hasattr(cell_anchors, '__iter__') else cell_anchors)
+                    else:
+                        z_row_data.append(None)
+                cell_anchor_data.append(z_row_data)
+            scene["arx_cell_anchor_data"] = pickle.dumps(cell_anchor_data)
+            
+            # Store portals as binary data
+            portal_data = []
+            for portal in fts_data.portals:
+                portal_data.append(bytes(portal))  # Serialize entire portal structure
+            scene["arx_portal_data"] = pickle.dumps(portal_data)
+            
+            # Store room data - handle ctypes arrays carefully
+            if hasattr(fts_data, 'room_data') and fts_data.room_data:
+                room_data_list, room_distances = fts_data.room_data
+                
+                # Serialize room structures as binary
+                serialized_rooms = []
+                for room_info, room_portal_indices, room_poly_refs in room_data_list:
+                    # Convert ctypes arrays to lists for pickling
+                    portal_indices_list = list(room_portal_indices) if room_portal_indices else []
+                    serialized_rooms.append({
+                        'room_info_bytes': bytes(room_info),
+                        'portal_indices': portal_indices_list,
+                        'poly_refs': [bytes(ref) for ref in room_poly_refs]  # Serialize polygon references
+                    })
+                
+                # Serialize distance matrix
+                serialized_distances = []
+                for row in room_distances:
+                    serialized_row = [bytes(dist) for dist in row]
+                    serialized_distances.append(serialized_row)
+                
+                scene["arx_room_data"] = pickle.dumps((serialized_rooms, serialized_distances))
+            
+            print(f"DEBUG: Stored FTS data: {len(fts_data.textures)} textures, {len(fts_data.portals)} portals")
+            
+        except Exception as e:
+            print(f"WARNING: Failed to store FTS data in scene properties: {e}")
     
     def bmesh_to_mesh_preserve_quads(self, bm, mesh):
         """Convert bmesh to mesh manually while preserving quad topology"""
@@ -512,3 +650,191 @@ class ArxSceneManager(object):
                     if color_layer and mesh.vertex_colors.active:
                         color = bm_loop[color_layer]
                         mesh.vertex_colors.active.data[loop_index].color = color
+
+    def AddScenePaths(self, scene, dlfData: DlfData, sceneOffset):
+        """Create Blender curve objects for DLF paths"""
+        if not dlfData.paths:
+            return
+            
+        paths_col = bpy.data.collections.new(scene.name + '-paths')
+        scene.collection.children.link(paths_col)
+        
+        for path_data, pathways in dlfData.paths:
+            path_name = path_data.name.decode('iso-8859-1').strip('\x00')
+            if not path_name:
+                path_name = f"path_{path_data.idx}"
+            
+            # Create empty object for path center
+            path_obj = bpy.data.objects.new(f'path:{path_name}', None)
+            path_obj.empty_display_type = 'ARROWS'
+            path_obj.empty_display_size = 1.0
+            
+            # Store path properties as custom properties
+            path_obj["arx_path_idx"] = path_data.idx
+            path_obj["arx_path_flags"] = path_data.flags
+            path_obj["arx_path_height"] = path_data.height
+            path_obj["arx_path_ambiance"] = path_data.ambiance.decode('iso-8859-1').strip('\x00')
+            path_obj["arx_path_reverb"] = path_data.reverb
+            path_obj["arx_path_farclip"] = path_data.farclip
+            path_obj["arx_path_amb_max_vol"] = path_data.amb_max_vol
+            
+            # Position the path object itself
+            path_abs_pos = Vector(sceneOffset) + Vector([path_data.pos.x, path_data.pos.y, path_data.pos.z])
+            path_obj.location = arx_pos_to_blender_for_model(path_abs_pos) * 0.1
+            
+            # Create child empty objects for each pathway waypoint (discrete points)
+            if pathways:
+                for i, pathway in enumerate(pathways):
+                    waypoint_name = f"{path_name}_waypoint_{i:03d}"
+                    waypoint_obj = bpy.data.objects.new(f'waypoint:{waypoint_name}', None)
+                    waypoint_obj.empty_display_type = 'SPHERE'
+                    waypoint_obj.empty_display_size = 0.5
+                    
+                    # Position waypoint in local coordinates relative to path object
+                    # pathway.rpos is relative to path.pos, so convert directly to Blender coordinates
+                    local_pos = arx_pos_to_blender_for_model(Vector([pathway.rpos.x, pathway.rpos.y, pathway.rpos.z])) * 0.1
+                    waypoint_obj.location = local_pos
+                    
+                    # Store pathway properties as custom properties
+                    waypoint_obj["arx_pathway_flag"] = pathway.flag
+                    waypoint_obj["arx_pathway_time"] = int(pathway.time)
+                    waypoint_obj["arx_pathway_index"] = i
+                    
+                    # Parent waypoint to path for organization (sets local coordinate space)
+                    waypoint_obj.parent = path_obj
+                    
+                    paths_col.objects.link(waypoint_obj)
+            
+            paths_col.objects.link(path_obj)
+            print(f"DEBUG: Created path '{path_name}' with {len(pathways)} discrete waypoints")
+
+    def AddSceneZones(self, scene, dlfData: DlfData, sceneOffset):
+        """Create Blender objects for DLF zones (paths with height != 0)"""
+        if not dlfData.zones:
+            return
+            
+        zones_col = bpy.data.collections.new(scene.name + '-zones')
+        scene.collection.children.link(zones_col)
+        
+        for zone_data, pathways in dlfData.zones:
+            zone_name = zone_data.name.decode('iso-8859-1').strip('\x00')
+            if not zone_name:
+                zone_name = f"zone_{zone_data.idx}"
+            
+            # Create empty object for zone center
+            zone_obj = bpy.data.objects.new(f'zone:{zone_name}', None)
+            zone_obj.empty_display_type = 'CUBE'
+            zone_obj.empty_display_size = 2.0
+            
+            # Position zone at center
+            zone_abs_pos = Vector(sceneOffset) + Vector([zone_data.pos.x, zone_data.pos.y, zone_data.pos.z])
+            zone_obj.location = arx_pos_to_blender_for_model(zone_abs_pos) * 0.1
+            
+            # Create child empty objects for zone boundary waypoints (discrete points)
+            if pathways:
+                for i, pathway in enumerate(pathways):
+                    waypoint_name = f"{zone_name}_waypoint_{i:03d}"
+                    waypoint_obj = bpy.data.objects.new(f'zone_waypoint:{waypoint_name}', None)
+                    waypoint_obj.empty_display_type = 'CONE'
+                    waypoint_obj.empty_display_size = 0.5
+                    
+                    # Position waypoint in local coordinates relative to zone object
+                    # pathway.rpos is relative to zone.pos, so convert directly to Blender coordinates
+                    local_pos = arx_pos_to_blender_for_model(Vector([pathway.rpos.x, pathway.rpos.y, pathway.rpos.z])) * 0.1
+                    waypoint_obj.location = local_pos
+                    
+                    # Store pathway properties as custom properties
+                    waypoint_obj["arx_pathway_flag"] = pathway.flag
+                    waypoint_obj["arx_pathway_time"] = int(pathway.time)
+                    waypoint_obj["arx_pathway_index"] = i
+                    
+                    # Parent waypoint to zone for organization (sets local coordinate space)
+                    waypoint_obj.parent = zone_obj
+                    
+                    zones_col.objects.link(waypoint_obj)
+            
+            # Store zone properties as custom properties
+            zone_obj["arx_zone_idx"] = zone_data.idx
+            zone_obj["arx_zone_flags"] = zone_data.flags
+            zone_obj["arx_zone_height"] = zone_data.height
+            zone_obj["arx_zone_ambiance"] = zone_data.ambiance.decode('iso-8859-1').strip('\x00')
+            zone_obj["arx_zone_reverb"] = zone_data.reverb
+            zone_obj["arx_zone_farclip"] = zone_data.farclip
+            zone_obj["arx_zone_amb_max_vol"] = zone_data.amb_max_vol
+            
+            zones_col.objects.link(zone_obj)
+            pathway_count = len(pathways) if pathways else 0
+            print(f"DEBUG: Created zone '{zone_name}' at {zone_obj.location} with {pathway_count} discrete waypoints")
+
+    def AddSceneFogs(self, scene, dlfData: DlfData, sceneOffset):
+        """Create Blender objects for DLF fogs"""
+        if not dlfData.fogs:
+            return
+            
+        fogs_col = bpy.data.collections.new(scene.name + '-fogs')
+        scene.collection.children.link(fogs_col)
+        
+        for i, fog in enumerate(dlfData.fogs):
+            fog_name = f"fog_{i:03d}"
+            
+            # Create empty object for fog
+            fog_obj = bpy.data.objects.new(f'fog:{fog_name}', None)
+            fog_obj.empty_display_type = 'SPHERE'
+            fog_obj.empty_display_size = fog.size * 0.01  # Scale to Blender units
+            
+            # Store fog properties as custom properties
+            fog_obj["arx_fog_size"] = fog.size
+            fog_obj["arx_fog_special"] = fog.special
+            fog_obj["arx_fog_scale"] = fog.scale
+            fog_obj["arx_fog_speed"] = fog.speed
+            fog_obj["arx_fog_rotatespeed"] = fog.rotatespeed
+            fog_obj["arx_fog_tolive"] = fog.tolive
+            fog_obj["arx_fog_blend"] = fog.blend
+            fog_obj["arx_fog_frequency"] = fog.frequency
+            
+            # Convert position
+            abs_pos = Vector(sceneOffset) + Vector([fog.pos.x, fog.pos.y, fog.pos.z])
+            fog_obj.location = arx_pos_to_blender_for_model(abs_pos) * 0.1
+            
+            # Convert rotation
+            fog_obj.rotation_euler = (radians(fog.angle.a), radians(fog.angle.b), radians(fog.angle.g))
+            
+            # Set color (use fog RGB for display)
+            fog_obj.color = (fog.rgb.r / 255.0, fog.rgb.g / 255.0, fog.rgb.b / 255.0, 1.0)
+            
+            fogs_col.objects.link(fog_obj)
+            print(f"DEBUG: Created fog '{fog_name}' at {fog_obj.location}")
+
+    def AddSceneDlfLights(self, scene, dlfData: DlfData, sceneOffset):
+        """Create Blender light objects for DLF lights"""
+        if not dlfData.lights:
+            return
+            
+        lights_col = bpy.data.collections.new(scene.name + '-dlf-lights')
+        scene.collection.children.link(lights_col)
+        
+        for i, light in enumerate(dlfData.lights):
+            light_name = f"dlf_light_{i:03d}"
+            
+            # Create light object
+            light_data = bpy.data.lights.new(light_name, 'POINT')
+            light_obj = bpy.data.objects.new(f'light:{light_name}', light_data)
+            
+            # Convert light properties
+            light_data.energy = light.intensity * 100.0  # Scale for Blender
+            light_data.color = (light.rgb.r / 255.0, light.rgb.g / 255.0, light.rgb.b / 255.0)
+            if light.fallend > 0:
+                light_data.distance = light.fallend * 0.1  # Scale to Blender units
+            
+            # Store additional properties
+            light_obj["arx_light_fallstart"] = light.fallstart
+            light_obj["arx_light_fallend"] = light.fallend
+            light_obj["arx_light_intensity"] = light.intensity
+            light_obj["arx_light_extras"] = light.extras
+            
+            # Convert position
+            abs_pos = Vector(sceneOffset) + Vector([light.pos.x, light.pos.y, light.pos.z])
+            light_obj.location = arx_pos_to_blender_for_model(abs_pos) * 0.1
+            
+            lights_col.objects.link(light_obj)
+            print(f"DEBUG: Created DLF light '{light_name}' at {light_obj.location}")

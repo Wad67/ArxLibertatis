@@ -26,12 +26,19 @@ log = logging.getLogger('Materials')
 
 def arx_create_image(rootDirectory, relativePath):
     extensions = [".png", ".jpg", ".jpeg", ".bmp", ".tga"]
+    fullPath = None
     for ext in extensions:
-        fullPath = os.path.join(rootDirectory, relativePath) + ext
-        if os.path.exists(fullPath):
+        testPath = os.path.join(rootDirectory, relativePath) + ext
+        #print(f"DEBUG: Testing texture path: {testPath}")
+        if os.path.exists(testPath):
+            fullPath = testPath
+            #print(f"DEBUG: Found texture at: {fullPath}")
             break
 
-    if not os.path.exists(fullPath):
+    if not fullPath or not os.path.exists(fullPath):
+        print(f"ERROR: Texture not found: {relativePath}")
+        print(f"DEBUG: Root directory: {rootDirectory}")
+        print(f"DEBUG: Relative path: {relativePath}")
         log.warning("Texture not found: %s" % relativePath)
         return None
 
