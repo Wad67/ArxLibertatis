@@ -573,20 +573,41 @@ class FtsSerializer(object):
         header.nb_polys = total_polys
         header.nb_anchors = len(fts_data.anchors)
         header.nb_portals = len(fts_data.portals)
-        # Use actual room count from original data (no arbitrary limit)
-        if hasattr(self, '_original_header'):
-            header.nb_rooms = self._original_header.nb_rooms
-        else:
-            # Calculate actual room count from portals and polygons
-            max_room = 0
-            for z in range(160):
-                for x in range(160):
-                    if z < len(cells_to_write) and x < len(cells_to_write[z]) and cells_to_write[z][x]:
-                        for poly in cells_to_write[z][x]:
-                            max_room = max(max_room, poly.room)
-            for portal in fts_data.portals:
+        # Calculate actual room count from portals and polygons (always recalculate for user modifications)
+        max_room = 0
+        room_ids_found = set()
+        
+        # Check all polygons for highest room ID
+        for z in range(160):
+            for x in range(160):
+                if z < len(cells_to_write) and x < len(cells_to_write[z]) and cells_to_write[z][x]:
+                    for poly in cells_to_write[z][x]:
+                        if hasattr(poly, 'room'):
+                            room_id = poly.room
+                            max_room = max(max_room, room_id)
+                            room_ids_found.add(room_id)
+                        elif isinstance(poly, dict) and 'room' in poly:
+                            room_id = poly['room']
+                            max_room = max(max_room, room_id)
+                            room_ids_found.add(room_id)
+        
+        # Check all portals for highest room ID
+        for portal in fts_data.portals:
+            if isinstance(portal, bytes):
+                # Parse binary portal data to get room IDs
+                from .dataFts import EERIE_SAVE_PORTALS
+                try:
+                    portal_struct = EERIE_SAVE_PORTALS.from_buffer_copy(portal)
+                    max_room = max(max_room, portal_struct.room_1, portal_struct.room_2)
+                except:
+                    pass  # Skip invalid portal data
+            else:
                 max_room = max(max_room, portal.room_1, portal.room_2)
-            header.nb_rooms = max_room + 1  # Room indices are 0-based
+        
+        header.nb_rooms = max_room  # nb_rooms = highest room ID, room data array is [0..max_room] inclusive
+        
+        self.log.info(f"Calculated room count: {header.nb_rooms} (max room ID found: {max_room})")
+        self.log.info(f"Room IDs found in polygons: {sorted(room_ids_found)}")
         header.playerpos.x = fts_data.sceneOffset[0]
         header.playerpos.y = fts_data.sceneOffset[1] 
         header.playerpos.z = fts_data.sceneOffset[2]
@@ -645,15 +666,19 @@ class FtsSerializer(object):
                             # Convert dict to ctypes for serialization
                             poly_struct = FAST_EERIEPOLY()
                             
-                            # Set vertices
+                            # Set vertices - engine expects all 4 vertices to be valid
                             for i in range(4):
                                 if i < len(poly['vertices']):
                                     vert = poly['vertices'][i]
-                                    poly_struct.v[i].ssx = vert['ssx']
-                                    poly_struct.v[i].sy = vert['sy']
-                                    poly_struct.v[i].ssz = vert['ssz']
-                                    poly_struct.v[i].stu = vert['stu']
-                                    poly_struct.v[i].stv = vert['stv']
+                                else:
+                                    # For triangles, duplicate the last vertex as the 4th vertex
+                                    vert = poly['vertices'][-1]
+                                
+                                poly_struct.v[i].ssx = vert['ssx']
+                                poly_struct.v[i].sy = vert['sy']
+                                poly_struct.v[i].ssz = vert['ssz']
+                                poly_struct.v[i].stu = vert['stu']
+                                poly_struct.v[i].stv = vert['stv']
                             
                             # Set polygon properties
                             poly_struct.tex = poly['tex']
@@ -672,18 +697,31 @@ class FtsSerializer(object):
                             poly_struct.norm2.y = norm2['y']
                             poly_struct.norm2.z = norm2['z']
                             
-                            # Set vertex normals
+                            # Set vertex normals - engine expects all 4 vertex normals to be valid
                             for i in range(4):
                                 if i < len(poly['vertex_normals']):
                                     vnorm = poly['vertex_normals'][i]
-                                    poly_struct.nrml[i].x = vnorm['x']
-                                    poly_struct.nrml[i].y = vnorm['y']
-                                    poly_struct.nrml[i].z = vnorm['z']
+                                else:
+                                    # For triangles, duplicate the last vertex normal as the 4th normal
+                                    vnorm = poly['vertex_normals'][-1]
+                                
+                                poly_struct.nrml[i].x = vnorm['x']
+                                poly_struct.nrml[i].y = vnorm['y']
+                                poly_struct.nrml[i].z = vnorm['z']
                             
                             # Set polygon type
                             from .dataCommon import PolyTypeFlag
                             poly_struct.type = PolyTypeFlag()
-                            poly_struct.type.asUInt = poly['poly_type']
+                            
+                            # Handle both integer and PolyTypeFlag values
+                            poly_type_value = poly['poly_type']
+                            if hasattr(poly_type_value, 'asUInt'):
+                                # It's already a PolyTypeFlag instance
+                                poly_struct.type.asUInt = poly_type_value.asUInt
+                            else:
+                                # It's an integer value
+                                poly_struct.type.asUInt = int(poly_type_value)
+                            
                             poly_struct.type.POLY_QUAD = poly['is_quad']
                             
                             data.extend(bytes(poly_struct))

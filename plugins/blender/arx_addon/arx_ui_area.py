@@ -22,7 +22,40 @@ from bpy.types import Operator, Panel, PropertyGroup, UIList
 from mathutils import Matrix, Vector, Quaternion
 from .arx_io_util import ArxException, arx_pos_to_blender_for_model, arx_transform_to_blender, blender_pos_to_arx
 from .managers import getAddon
+from .arx_asl_reader import ASLReader
+from .arx_asl_syntax import ASLSyntaxHighlighter, ASLNavigator
 import math
+
+# Global ASL navigator instance
+g_asl_navigator = None
+
+def get_asl_text_name(entity_ident, object_id=None):
+    """Generate consistent text block name for ASL files"""
+    if object_id:
+        safe_object_id = object_id.replace('/', '_')
+        return f"ASL_{safe_object_id}_{entity_ident:04d}"
+    else:
+        return f"ASL_{entity_ident:04d}"
+
+def parse_asl_text_name(text_name):
+    """Parse entity_ident and object_id from ASL text block name"""
+    if not text_name.startswith('ASL_'):
+        return None, None
+    
+    parts = text_name[4:].split('_')  # Remove 'ASL_' prefix
+    
+    try:
+        if len(parts) == 1:
+            # Format: ASL_0001
+            entity_ident = int(parts[0])
+            return entity_ident, None
+        else:
+            # Format: ASL_object_id_0001
+            entity_ident = int(parts[-1])  # Last part is always entity_ident
+            object_id = '_'.join(parts[:-1]).replace('_', '/')  # Restore original object_id
+            return entity_ident, object_id
+    except ValueError:
+        return None, None
 
 g_areaToLevel = {
     0:0, 8:0, 11:0, 12:0,
@@ -246,14 +279,18 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
         if not background_obj:
             raise ArxException(f"No background geometry found in scene {scene.name}")
         
-        # Load lighting data for vertex lighting calculations (only if needed)
-        if export_llf or export_fts:
+        # Load lighting data for vertex lighting calculations (only if needed for LLF export)
+        if export_llf:
             if area_files.llf:
                 llfData = addon.sceneManager.llfSerializer.read(area_files.llf)
                 self._storeLightsForLighting(llfData)
             else:
                 print("WARNING: No LLF file found - lighting calculations will use defaults")
                 self._storeLightsForLighting(None)
+        elif export_fts:
+            # For FTS-only export, skip lighting data loading for performance
+            print("DEBUG: FTS-only export - skipping lighting data loading")
+            self._storeLightsForLighting(None)
         
         # Try to restore complete FTS data from scene properties first
         current_scene = background_obj.users_scene[0]
@@ -273,9 +310,16 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
         # Store scene offset for lighting calculations
         self._scene_offset = Vector(fts_data.sceneOffset) if hasattr(fts_data, 'sceneOffset') else Vector((0, 0, 0))
         
-        # Set lighting recalculation mode - could be made user-configurable
-        # For now, recalculate lighting for modified geometry to fix lightmap issues
-        self._preserve_original_lighting = False  # Set to True to preserve existing vertex colors
+        # Set lighting recalculation mode based on export type
+        if export_llf:
+            # For LLF export, recalculate lighting for modified geometry to fix lightmap issues
+            self._preserve_original_lighting = False
+            print("DEBUG: LLF export - will recalculate vertex lighting")
+        else:
+            # For FTS-only export, preserve existing lighting to avoid expensive calculations
+            # BUT regenerate if geometry has changed to prevent vector bounds errors
+            self._preserve_original_lighting = True
+            print("DEBUG: FTS-only export - preserving existing vertex lighting for performance")
         
         # Convert Blender mesh back to FTS cells with current material assignments
         fts_data = self.convertMeshToFtsCells(background_obj, fts_data)
@@ -284,17 +328,46 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
         original_face_count = current_scene.get("arx_original_face_count", len(self.converted_faces))
         geometry_modified = len(self.converted_faces) != original_face_count
         
-        # For now, preserve original portals to avoid serialization issues
-        # TODO: Implement proper portal reading from Blender scene
-        print("DEBUG: Preserving original portal system (portal reading disabled temporarily)")
+        # Read user-placed portals from Blender scene and update FTS data (skip if no portals)
+        portal_count = 0
+        for collection in current_scene.collection.children:
+            if 'portals' in collection.name.lower():
+                portal_count = len([obj for obj in collection.objects if obj.type == 'MESH'])
+                break
         
-        if geometry_modified:
-            print(f"DEBUG: Geometry modified ({len(self.converted_faces)} vs {original_face_count} faces) - assigning rooms to new faces")
-            # Assign room IDs to new faces and rebuild room references
-            fts_data = self._assignRoomsToNewGeometry(fts_data)
+        if portal_count > 0:
+            print(f"DEBUG: Reading {portal_count} portals from Blender scene")
+            fts_data = self._rebuildPortalSystemFromBlender(fts_data, current_scene)
+        else:
+            print("DEBUG: No portals found - keeping original portal data")
         
-        # Rebuild room polygon references for all geometry  
-        fts_data = self._rebuildRoomPolygonReferences(fts_data) or fts_data
+        # Read user-modified anchor network from Blender scene (skip if no anchors)
+        anchor_count = 0
+        for collection in current_scene.collection.children:
+            if 'anchors' in collection.name.lower():
+                anchor_count = len([obj for obj in collection.objects if obj.type == 'MESH'])
+                break
+        if anchor_count == 0:
+            anchor_count = len([obj for obj in current_scene.collection.objects if 'anchor' in obj.name.lower() and obj.type == 'MESH'])
+        
+        if anchor_count > 0:
+            print(f"DEBUG: Reading {anchor_count} anchor objects from Blender scene")
+            fts_data = self._rebuildAnchorNetworkFromBlender(fts_data, current_scene)
+        else:
+            print("DEBUG: No anchor objects found - keeping original anchor data")
+        
+        # Only rebuild room polygon references if geometry was modified or new portals added
+        if geometry_modified or portal_count > 0:
+            if geometry_modified:
+                print(f"DEBUG: Geometry modified ({len(self.converted_faces)} vs {original_face_count} faces) - user must assign room IDs manually")
+                # Force lighting regeneration when geometry changes to prevent vector bounds errors
+                if self._preserve_original_lighting:
+                    print("DEBUG: Forcing lighting regeneration due to geometry changes")
+                    self._preserve_original_lighting = False
+            print("DEBUG: Rebuilding room polygon references due to changes")
+            fts_data = self._rebuildRoomPolygonReferences(fts_data) or fts_data
+        else:
+            print("DEBUG: No geometry/portal changes - keeping original room references")
         
         # Write back to original FTS file
         if export_fts:
@@ -364,6 +437,16 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
         cell_x_layer = bm.faces.layers.int.get('arx_cell_x')
         cell_z_layer = bm.faces.layers.int.get('arx_cell_z')
         
+        # FORCE CLEARING of old cell coordinates to ensure recalculation
+        if cell_x_layer:
+            print("DEBUG: Clearing old arx_cell_x data to force recalculation")
+            bm.faces.layers.int.remove(cell_x_layer)
+            cell_x_layer = None
+        if cell_z_layer:
+            print("DEBUG: Clearing old arx_cell_z data to force recalculation")
+            bm.faces.layers.int.remove(cell_z_layer)
+            cell_z_layer = None
+        
         if not uv_layer:
             raise ArxException("Background mesh missing UV coordinates")
         
@@ -427,10 +510,12 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
                 })
             
             # Reverse the vertex order swap that was done during import for quads
+            vertex_order_swapped = False
             if len(face.verts) == 4 and len(arx_vertices) == 4:
                 # During import: tempVerts[2], tempVerts[3] = tempVerts[3], tempVerts[2]
                 # So during export, swap them back
                 arx_vertices[2], arx_vertices[3] = arx_vertices[3], arx_vertices[2]
+                vertex_order_swapped = True
             
             # Get preserved geometric data or fallback to Blender-calculated
             if norm_layer and norm2_layer:
@@ -441,6 +526,23 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
                 # Fallback: calculate from Blender geometry
                 blender_normal = face.normal
                 arx_normal = Vector(blender_pos_to_arx(blender_normal))
+                
+                # If we swapped vertex order for quads, the normal direction may be wrong
+                # For new custom geometry, recalculate normal from actual vertex positions
+                if vertex_order_swapped or not (norm_layer and norm2_layer):
+                    # Calculate normal from the actual vertex order we're using
+                    if len(arx_vertices) >= 3:
+                        v0 = Vector(arx_vertices[0]['pos'])
+                        v1 = Vector(arx_vertices[1]['pos']) 
+                        v2 = Vector(arx_vertices[2]['pos'])
+                        edge1 = v1 - v0
+                        edge2 = v2 - v0
+                        calculated_normal = edge1.cross(edge2).normalized()
+                        arx_normal = calculated_normal
+                        
+                        if len(converted_faces) < 3:
+                            print(f"DEBUG: Face {len(converted_faces)} normal: blender={blender_normal} → calculated={calculated_normal}")
+                
                 arx_normal2 = arx_normal
             
             # Get preserved vertex normals
@@ -467,6 +569,11 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
                 blender_area = face.calc_area()
                 stored_area = blender_area * (10.0 * 10.0)  # Scale factor is 10.0, area scales by square
             room_id = face[room_layer] if room_layer else 0
+            # Clamp room ID to valid range (engine crashes on negative room IDs)
+            if room_id < 0:
+                room_id = 0
+                if len(converted_faces) < 10:
+                    print(f"WARNING: Face {len(converted_faces)} had negative room ID, clamped to 0")
             # Use current material assignment instead of preserved texture index
             # This ensures texture changes in Blender are reflected in the export
             blender_mat_index = face.material_index
@@ -483,24 +590,18 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
                 # POLY_QUAD flag is bit 0, so value is 1 if quad, 0 if triangle
                 poly_type = 1 if is_quad else 0
             
-            # Get preserved cell coordinates or calculate from geometry
-            if cell_x_layer and cell_z_layer:
+            # Get preserved cell coordinates (only store if they exist in mesh data)
+            has_preserved_cell_coords = cell_x_layer and cell_z_layer
+            if has_preserved_cell_coords:
                 cell_x = face[cell_x_layer]
                 cell_z = face[cell_z_layer]
             else:
-                # Calculate cell from face center position
-                face_center = face.calc_center_median()
-                arx_center = Vector(blender_pos_to_arx(face_center)) * 10.0
-                
-                # Cell grid is 160x160 units per cell, offset by scene position
-                scene_offset = fts_data.sceneOffset if hasattr(fts_data, 'sceneOffset') else (0, 0, 0)
-                relative_pos = arx_center - Vector(scene_offset)
-                
-                cell_x = max(0, min(159, int(relative_pos.x / 160)))
-                cell_z = max(0, min(159, int(relative_pos.z / 160)))
+                # No preserved coordinates - let cell grid generation calculate them later
+                cell_x = None
+                cell_z = None
                 
                 if len(converted_faces) < 5:
-                    print(f"DEBUG: Calculated cell for face {len(converted_faces)}: center={face_center} → arx={arx_center} → cell=({cell_x}, {cell_z})")
+                    print(f"DEBUG: No preserved cell coordinates for face {len(converted_faces)} - will calculate during grid generation")
             
             # Debug: log room values from Blender face data
             if len(converted_faces) < 5:
@@ -526,10 +627,12 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
                 'norm2': arx_normal2,  # Use preserved secondary normal
                 'vertex_normals': vertex_normals[:4],  # Use preserved per-vertex normals
                 'tex': fts_texture_id,  # Use current material assignment
-                # Preserved cell coordinates for exact placement
-                'cell_x': cell_x,
-                'cell_z': cell_z
             }
+            
+            # Only add cell coordinates if they were preserved from mesh data
+            if has_preserved_cell_coords:
+                fts_polygon['cell_x'] = cell_x
+                fts_polygon['cell_z'] = cell_z
             
             converted_faces.append(fts_polygon)
         
@@ -949,8 +1052,19 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
         cell_polygons = {}  # (cell_x, cell_z) -> [(room_id, poly_idx_in_cell), ...]
         
         for face_data in self.converted_faces:
-            cell_x = face_data.get('cell_x', 0)
-            cell_z = face_data.get('cell_z', 0) 
+            # Calculate cell coordinates using same logic as grid reconstruction
+            vertices = face_data.get('vertices', [])
+            if vertices:
+                center_x = sum(v['pos'][0] for v in vertices) / len(vertices)
+                center_z = sum(v['pos'][2] for v in vertices) / len(vertices)
+                cell_x = int(center_x / 100)
+                cell_z = int(center_z / 100)
+                # Clamp to valid range
+                cell_x = max(0, min(159, cell_x))
+                cell_z = max(0, min(159, cell_z))
+            else:
+                cell_x = 80  # Center fallback
+                cell_z = 80
             room_id = face_data.get('room', 0)
             
             cell_key = (cell_x, cell_z)
@@ -970,9 +1084,20 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
                     room_polygon_refs[room_id] = []
                 room_polygon_refs[room_id].append((cell_x, cell_z, poly_idx))
         
-        # Rebuild room structures with simple Python data (not ctypes)
+        # Find the maximum room ID actually used
+        max_room_id = max(room_polygon_refs.keys()) if room_polygon_refs else 0
+        max_room_id = max(max_room_id, len(room_data_list) - 1)  # Ensure we don't shrink existing rooms
+        
+        print(f"DEBUG: Expanding room data to support room IDs 0-{max_room_id}")
+        
+        # Rebuild room structures with simple Python data (not ctypes) for ALL room IDs
         new_room_data_list = []
-        for room_idx, (room_info, room_portal_indices, old_room_poly_refs) in enumerate(room_data_list):
+        for room_idx in range(max_room_id + 1):
+            
+            # Get portal indices for this room (if it exists in old data)
+            room_portal_indices = []
+            if room_idx < len(room_data_list):
+                _, room_portal_indices, _ = room_data_list[room_idx]
             
             # Create new room info as simple dict (not ctypes)
             new_room_info = {
@@ -1008,9 +1133,39 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
                 if portal_idx < 5:  # Debug first few portals
                     print(f"DEBUG: Portal {portal_idx} connects rooms (data available but structure analysis needed)")
         
+        # Expand room distance matrix if needed
+        current_matrix_size = len(room_distances) if room_distances else 0
+        required_matrix_size = max_room_id + 1
+        
+        if required_matrix_size > current_matrix_size:
+            print(f"DEBUG: Expanding room distance matrix from {current_matrix_size}x{current_matrix_size} to {required_matrix_size}x{required_matrix_size}")
+            
+            # Create new larger distance matrix
+            new_room_distances = []
+            for i in range(required_matrix_size):
+                row = []
+                for j in range(required_matrix_size):
+                    if i < current_matrix_size and j < current_matrix_size and room_distances:
+                        # Copy existing distance data
+                        row.append(room_distances[i][j])
+                    else:
+                        # Create default distance data for new rooms
+                        from .dataFts import ROOM_DIST_DATA_SAVE
+                        dist_data = ROOM_DIST_DATA_SAVE()
+                        if i == j:
+                            dist_data.distance = 0.0  # Same room
+                        else:
+                            dist_data.distance = 999999.0  # Different rooms, max distance
+                        # Set start/end positions to zero for new rooms
+                        dist_data.startpos.x = dist_data.startpos.y = dist_data.startpos.z = 0.0
+                        dist_data.endpos.x = dist_data.endpos.y = dist_data.endpos.z = 0.0
+                        row.append(bytes(dist_data))
+                new_room_distances.append(row)
+            room_distances = new_room_distances
+        
         # Update the FTS data with rebuilt room references using namedtuple _replace
         # Note: This function needs to return the updated fts_data since namedtuples are immutable
-        print(f"DEBUG: Rebuilt room references for {len(new_room_data_list)} rooms")
+        print(f"DEBUG: Rebuilt room references for {len(new_room_data_list)} rooms (max room ID: {max_room_id})")
         return fts_data._replace(room_data=(new_room_data_list, room_distances))
     
     def _disablePortalSystem(self, fts_data):
@@ -1090,15 +1245,212 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
             
             print(f"DEBUG: Portal {len(new_portals)}: connects room {room_1} ↔ room {room_2}")
             
-            # Create portal data as binary bytes (compatible with FTS serializer)
-            # For now, keep original portal format instead of trying to reconstruct complex structures
-            # This maintains compatibility with the existing FTS serializer
-            pass  # Skip adding new portals for now to avoid serialization issues
+            # Create portal data as dictionary (compatible with FTS serializer)
+            
+            # Calculate face normal from first 3 vertices
+            normal = Vector((0, 0, 1))
+            if len(portal_vertices) >= 3:
+                v1 = portal_vertices[1] - portal_vertices[0]
+                v2 = portal_vertices[2] - portal_vertices[0]
+                normal = v1.cross(v2).normalized()
+            
+            # Build vertex data
+            vertices = []
+            vertex_normals = []
+            for i in range(4):
+                if i < len(portal_vertices):
+                    pos = portal_vertices[i]
+                    vertices.append({
+                        'x': pos.x, 'y': pos.y, 'z': pos.z,
+                        'rhw': 1.0, 'color': 0xFFFFFFFF, 'specular': 0,
+                        'tu': 0.0 if i % 2 == 0 else 1.0,
+                        'tv': 0.0 if i < 2 else 1.0
+                    })
+                    vertex_normals.append({'x': normal.x, 'y': normal.y, 'z': normal.z})
+                else:
+                    # Duplicate last vertex for triangles
+                    vertices.append(vertices[-1])
+                    vertex_normals.append(vertex_normals[-1])
+            
+            # Calculate bounding box
+            min_x = min(v.x for v in portal_vertices) if portal_vertices else 0
+            max_x = max(v.x for v in portal_vertices) if portal_vertices else 0
+            min_y = min(v.y for v in portal_vertices) if portal_vertices else 0
+            max_y = max(v.y for v in portal_vertices) if portal_vertices else 0
+            min_z = min(v.z for v in portal_vertices) if portal_vertices else 0
+            max_z = max(v.z for v in portal_vertices) if portal_vertices else 0
+            
+            # Create portal polygon dictionary with proper PolyTypeFlag values
+            # POLY_QUAD is bit 6, so value is 64 (0x40) for quads, 0 for triangles
+            poly_type_value = 64 if len(face.vertices) == 4 else 0  # POLY_QUAD bit
+            portal_poly = {
+                'vertices': vertices,
+                'vertex_normals': vertex_normals,
+                'poly_type': poly_type_value,  # PolyTypeFlag bit values
+                'is_quad': len(face.vertices) == 4,
+                'norm': {'x': normal.x, 'y': normal.y, 'z': normal.z},
+                'norm2': {'x': normal.x, 'y': normal.y, 'z': normal.z},
+                'min': {'x': min_x, 'y': min_y, 'z': min_z},
+                'max': {'x': max_x, 'y': max_y, 'z': max_z},
+                'center': {'x': (min_x + max_x) / 2, 'y': (min_y + max_y) / 2, 'z': (min_z + max_z) / 2},
+                'tex': -1,  # No texture for portals
+                'transval': 0.0,
+                'area': 1.0,
+                'room': room_1,
+                'misc': 0
+            }
+            
+            # Create complete portal structure as ctypes (for FTS serialization)
+            from .dataFts import EERIE_SAVE_PORTALS, SAVE_EERIEPOLY
+            
+            # Create the ctypes structures
+            portal_poly_struct = SAVE_EERIEPOLY()
+            portal_struct = EERIE_SAVE_PORTALS()
+            
+            # Fill the polygon structure from dictionary data
+            for i, vertex in enumerate(portal_poly['vertices']):
+                portal_poly_struct.v[i].pos.x = vertex['x']
+                portal_poly_struct.v[i].pos.y = vertex['y'] 
+                portal_poly_struct.v[i].pos.z = vertex['z']
+                portal_poly_struct.v[i].rhw = vertex['rhw']
+                portal_poly_struct.v[i].color = vertex['color']
+                portal_poly_struct.v[i].specular = vertex['specular']
+                portal_poly_struct.v[i].tu = vertex['tu']
+                portal_poly_struct.v[i].tv = vertex['tv']
+                portal_poly_struct.tv[i] = portal_poly_struct.v[i]
+                
+                # Set vertex normal
+                vnorm = portal_poly['vertex_normals'][i]
+                portal_poly_struct.nrml[i].x = vnorm['x']
+                portal_poly_struct.nrml[i].y = vnorm['y']
+                portal_poly_struct.nrml[i].z = vnorm['z']
+            
+            # Set polygon properties (type is c_int32, not PolyTypeFlag)
+            portal_poly_struct.type = portal_poly['poly_type']
+            portal_poly_struct.norm.x = portal_poly['norm']['x']
+            portal_poly_struct.norm.y = portal_poly['norm']['y']
+            portal_poly_struct.norm.z = portal_poly['norm']['z']
+            portal_poly_struct.norm2 = portal_poly_struct.norm
+            portal_poly_struct.min.x = portal_poly['min']['x']
+            portal_poly_struct.min.y = portal_poly['min']['y']
+            portal_poly_struct.min.z = portal_poly['min']['z']
+            portal_poly_struct.max.x = portal_poly['max']['x']
+            portal_poly_struct.max.y = portal_poly['max']['y']
+            portal_poly_struct.max.z = portal_poly['max']['z']
+            portal_poly_struct.center.x = portal_poly['center']['x']
+            portal_poly_struct.center.y = portal_poly['center']['y']
+            portal_poly_struct.center.z = portal_poly['center']['z']
+            portal_poly_struct.tex = portal_poly['tex']
+            portal_poly_struct.transval = portal_poly['transval']
+            portal_poly_struct.area = portal_poly['area']
+            portal_poly_struct.room = portal_poly['room']
+            portal_poly_struct.misc = portal_poly['misc']
+            
+            # Set portal structure
+            portal_struct.poly = portal_poly_struct
+            portal_struct.room_1 = room_1
+            portal_struct.room_2 = room_2
+            portal_struct.useportal = useportal
+            portal_struct.paddy = 0
+            
+            # Store as bytes for FTS serialization
+            new_portals.append(bytes(portal_struct))
         
         print(f"DEBUG: Rebuilt {len(new_portals)} portals from Blender scene")
         
         # Update FTS data with new portals
         return fts_data._replace(portals=new_portals)
+    
+    def _rebuildAnchorNetworkFromBlender(self, fts_data, scene):
+        """Read anchor network from Blender anchor mesh and rebuild anchor system"""
+        from mathutils import Vector
+        
+        # Find anchors collection or objects
+        anchors_collection = None
+        anchor_objects = []
+        
+        # Look for anchors collection first
+        for collection in scene.collection.children:
+            if 'anchors' in collection.name.lower():
+                anchors_collection = collection
+                break
+        
+        if anchors_collection:
+            anchor_objects = [obj for obj in anchors_collection.objects if obj.type == 'MESH']
+            print(f"DEBUG: Found anchors collection '{anchors_collection.name}' with {len(anchor_objects)} anchor objects")
+        else:
+            # Look for individual anchor objects in main collection
+            anchor_objects = [obj for obj in scene.collection.objects if 'anchor' in obj.name.lower() and obj.type == 'MESH']
+            if anchor_objects:
+                print(f"DEBUG: Found {len(anchor_objects)} anchor objects in main collection")
+        
+        if not anchor_objects:
+            print("DEBUG: No anchor objects found - keeping original anchors")
+            return fts_data
+        
+        # Read anchor positions and connections from mesh
+        new_anchors = []
+        new_cell_anchors = [[[] for _ in range(160)] for _ in range(160)]
+        
+        # Process anchor mesh to extract anchor network
+        for anchor_obj in anchor_objects:
+            mesh = anchor_obj.data
+            if not mesh.vertices:
+                continue
+            
+            # Get anchor positions from vertices
+            anchor_positions = []
+            for vertex in mesh.vertices:
+                world_pos = anchor_obj.matrix_world @ vertex.co
+                # Convert back to Arx coordinates
+                arx_pos = blender_pos_to_arx(world_pos)
+                arx_pos = Vector(arx_pos) * 10.0  # Reverse 0.1 scale
+                anchor_positions.append((arx_pos.x, arx_pos.y, arx_pos.z))
+            
+            # Build anchor connectivity from mesh edges
+            anchor_links = [[] for _ in range(len(anchor_positions))]
+            for edge in mesh.edges:
+                v1, v2 = edge.vertices
+                if v1 < len(anchor_links) and v2 < len(anchor_links):
+                    anchor_links[v1].append(v2)
+                    anchor_links[v2].append(v1)  # Bidirectional links
+            
+            # Create anchor data with preserved properties or defaults
+            base_anchor_index = len(new_anchors)
+            for i, pos in enumerate(anchor_positions):
+                global_index = base_anchor_index + i
+                
+                # Get anchor properties from custom properties or use defaults
+                radius = anchor_obj.get('arx_anchor_radius', 50.0)
+                height = anchor_obj.get('arx_anchor_height', 100.0)
+                flags = anchor_obj.get('arx_anchor_flags', 0)
+                
+                # Convert local links to global indices
+                global_links = [base_anchor_index + link for link in anchor_links[i]]
+                
+                anchor_data = (pos, global_links, radius, height, flags)
+                new_anchors.append(anchor_data)
+                
+                # Add anchor to appropriate cell for spatial indexing
+                # Convert position to cell coordinates
+                scene_offset = fts_data.sceneOffset if hasattr(fts_data, 'sceneOffset') else (0, 0, 0)
+                relative_x = pos[0] - scene_offset[0]
+                relative_z = pos[2] - scene_offset[2]
+                cell_x = max(0, min(159, int(relative_x / 100)))
+                cell_z = max(0, min(159, int(relative_z / 100)))
+                
+                new_cell_anchors[cell_z][cell_x].append(global_index)
+        
+        # Convert cell anchor lists to proper format (None for empty cells)
+        for z in range(160):
+            for x in range(160):
+                if not new_cell_anchors[z][x]:
+                    new_cell_anchors[z][x] = None
+        
+        print(f"DEBUG: Rebuilt {len(new_anchors)} anchors from Blender anchor mesh")
+        
+        # Update FTS data with new anchor network
+        return fts_data._replace(anchors=new_anchors, cell_anchors=new_cell_anchors)
     
     def _assignRoomsToNewGeometry(self, fts_data):
         """Assign room IDs to new faces based on spatial connectivity"""
@@ -1902,7 +2254,7 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
             
             return bytes(result)
     
-    def writeFtsFile(self, fts_path, original_fts_data, converted_faces):
+    def writeFtsFile(self, fts_path, fts_data, converted_faces):
         """Write FTS file with updated background geometry"""
         if len(converted_faces) == 0:
             raise ArxException("No faces to export")
@@ -1911,7 +2263,7 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
         self._validateFtsProperties(converted_faces)
         
         # Convert faces back to FTS polygon structures  
-        updated_cells = self._reconstructCellGrid(converted_faces, original_fts_data)
+        updated_cells = self._reconstructCellGrid(converted_faces, fts_data)
         
         # Write FTS file using the serializer  
         import bpy
@@ -1919,7 +2271,7 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
         fts_serializer = addon.sceneManager.ftsSerializer
         
         try:
-            fts_serializer.write_fts_container(fts_path, original_fts_data, updated_cells)
+            fts_serializer.write_fts_container(fts_path, fts_data, updated_cells)
             self.report({'INFO'}, f"Successfully wrote FTS file with {len(converted_faces)} faces")
         except Exception as e:
             raise ArxException(f"FTS write failed: {str(e)}")
@@ -1937,13 +2289,18 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
         if missing_props:
             raise ArxException(f"Missing required FTS properties: {set(missing_props)}")
     
-    def _reconstructCellGrid(self, converted_faces, original_fts_data):
+    def _reconstructCellGrid(self, converted_faces, fts_data):
         """Reconstruct FTS cell grid from converted face data with spatial partitioning"""
         import math
         
         # Get scene offset for proper cell grid alignment
-        scene_offset = original_fts_data.sceneOffset
+        scene_offset = fts_data.sceneOffset
         print(f"DEBUG: Using scene offset: {scene_offset}")
+        
+        # Debug: Check if scene offset seems reasonable
+        if abs(scene_offset[0]) > 50000 or abs(scene_offset[2]) > 50000:
+            print(f"WARNING: Scene offset seems very large, this may cause grid issues")
+            print(f"WARNING: First few face centers will be around ({converted_faces[0]['vertices'][0]['pos'][0]:.1f}, {converted_faces[0]['vertices'][0]['pos'][2]:.1f}) if available")
         
         # Create Python dict structures instead of ctypes to avoid read-only issues
         fts_polygons = []
@@ -2050,36 +2407,71 @@ class CUSTOM_OT_arx_area_list_export_all(Operator, ArxAreaExportHelper):
         # Initialize 160x160 cell grid
         updated_cells = [[None for _ in range(160)] for _ in range(160)]
         
-        # Use preserved cell coordinates for exact placement (no spatial calculation needed)
+        # Place polygons in cell grid using preserved coordinates or spatial calculation
         faces_processed = 0
         faces_placed = 0
+        faces_calculated = 0
+        
         for poly, face_data in fts_polygons:
             faces_processed += 1
             
-            # Get preserved cell coordinates
-            cell_x = face_data.get('cell_x', 0)
-            cell_z = face_data.get('cell_z', 0)
+            # Force recalculation of cell coordinates for all faces
+            # Clear any preserved cell coordinates that might be wrong
+            if 'cell_x' in face_data:
+                del face_data['cell_x']
+            if 'cell_z' in face_data:
+                del face_data['cell_z']
+            cell_x = None
+            cell_z = None
             
-            # Debug first few faces
-            if faces_processed <= 5:
-                print(f"DEBUG: Face {faces_processed}: preserved cell=({cell_x}, {cell_z})")
+            # Calculate center of polygon vertices
+            vertices = face_data.get('vertices', [])
+            if vertices:
+                center_x = sum(v['pos'][0] for v in vertices) / len(vertices)
+                center_z = sum(v['pos'][2] for v in vertices) / len(vertices)
+                
+                # Convert to cell coordinates (160x160 grid, each cell is 100 units)
+                # Based on analysis: scene_offset should NOT be used for grid calculation
+                # Grid cells are simply: cell = int(coordinate / 100)
+                
+                cell_x = int(center_x / 100)  
+                cell_z = int(center_z / 100)
+                
+                # Validate bounds - if out of bounds, skip the face
+                if cell_x < 0 or cell_x >= 160 or cell_z < 0 or cell_z >= 160:
+                    if faces_processed < 10:  # Log first few out-of-bounds faces
+                        print(f"DEBUG: Skipping out-of-bounds face at cell ({cell_x}, {cell_z}) - center: ({center_x:.1f}, {center_z:.1f})")
+                    continue
+                faces_calculated += 1
+                
+                if faces_processed <= 5:
+                    print(f"DEBUG: Face {faces_processed}: calculated cell=({cell_x}, {cell_z}) from center=({center_x:.1f}, {center_z:.1f})")
+            else:
+                # Fallback to center cell if no vertices
+                cell_x, cell_z = 80, 80
+                print(f"WARNING: Face {faces_processed} has no vertices, placing in center cell (80, 80)")
             
             # Validate cell coordinates
             if 0 <= cell_x < 160 and 0 <= cell_z < 160:
-                # Add polygon to its original cell
+                # Add polygon to its cell
                 if updated_cells[cell_z][cell_x] is None:
                     updated_cells[cell_z][cell_x] = []
                 updated_cells[cell_z][cell_x].append(poly)
                 faces_placed += 1
             else:
-                print(f"ERROR: Invalid preserved cell coordinates ({cell_x}, {cell_z}) for face {faces_processed}")
+                print(f"ERROR: Invalid cell coordinates ({cell_x}, {cell_z}) for face {faces_processed}, placing in center")
+                # Fallback to center cell
+                if updated_cells[80][80] is None:
+                    updated_cells[80][80] = []
+                updated_cells[80][80].append(poly)
+                faces_placed += 1
         
         # Count populated cells
         populated_cells = sum(1 for z in range(160) for x in range(160) if updated_cells[z][x] is not None)
         total_polys = sum(len(updated_cells[z][x]) for z in range(160) for x in range(160) if updated_cells[z][x] is not None)
         
-        print(f"DEBUG: Processed {faces_processed} faces, {faces_placed} placed in original cells, {total_polys} total in grid")
-        self.report({'INFO'}, f"Reconstructed cell grid: {total_polys} polygons in {populated_cells} cells")
+        print(f"DEBUG: Processed {faces_processed} faces, {faces_placed} placed in cells ({faces_calculated} calculated, {faces_processed - faces_calculated} preserved), {total_polys} total in grid")
+        self.report({'INFO'}, f"Reconstructed cell grid: {total_polys} polygons in {populated_cells} cells ({faces_calculated} new coordinates calculated)")
         
         return updated_cells
     
@@ -2595,29 +2987,6 @@ class CUSTOM_OT_arx_area_export_fts(Operator):
     bl_description = "Export area background geometry to FTS format only"
     
     def invoke(self, context, event):
-        area_list = context.window_manager.arx_areas_col
-        if not area_list:
-            self.report({'ERROR'}, "No area list loaded")
-            return {'CANCELLED'}
-            
-        area = area_list[context.window_manager.arx_areas_idx]
-        scene_name = f"Area_{area.area_id:02d}"
-        scene = bpy.data.scenes.get(scene_name)
-        
-        if not scene:
-            self.report({'ERROR'}, f"Scene '{scene_name}' not found. Import the area first.")
-            return {'CANCELLED'}
-        
-        try:
-            self.exportFts(context, scene, area.area_id)
-            self.report({'INFO'}, f"Exported FTS for Area {area.area_id}")
-        except Exception as e:
-            self.report({'ERROR'}, f"FTS export failed: {str(e)}")
-            return {'CANCELLED'}
-            
-        return {'FINISHED'}
-    
-    def invoke(self, context, event):
         """Call main export operator with FTS only"""
         print("DEBUG: FTS export button pressed")
         return bpy.ops.arx.area_list_export_all('INVOKE_DEFAULT', export_fts=True, export_llf=False, export_dlf=False)
@@ -2922,6 +3291,404 @@ class CUSTOM_OT_arx_preview_lighting(Operator):
         self.report({'INFO'}, "Switched to vertex color preview mode")
         return {'FINISHED'}
 
+class CUSTOM_OT_arx_open_entity_asl(Operator):
+    bl_idname = "arx.open_entity_asl"
+    bl_label = "Open Entity ASL"
+    bl_description = "Open the ASL file for the selected entity in a text editor"
+    
+    def execute(self, context):
+        obj = context.active_object
+        if not obj:
+            self.report({'ERROR'}, "No active object selected")
+            return {'CANCELLED'}
+            
+        # Check if object is an entity
+        if not obj.name.startswith('e:'):
+            self.report({'ERROR'}, "Selected object is not an entity")
+            return {'CANCELLED'}
+            
+        # Get entity identifier
+        entity_ident = obj.get("arx_entity_ident")
+        if entity_ident is None:
+            self.report({'ERROR'}, "Entity identifier not found")
+            return {'CANCELLED'}
+        
+        # Get object identifier for better ASL file resolution
+        object_id = obj.get("arx_object_id")
+            
+        # Get data path from addon
+        addon = getAddon(context)
+        if not hasattr(addon, 'sceneManager') or not hasattr(addon.sceneManager, 'dataPath'):
+            self.report({'ERROR'}, "Arx data path not configured")
+            return {'CANCELLED'}
+            
+        # Read ASL file
+        asl_reader = ASLReader(addon.sceneManager.dataPath)
+        asl_content = asl_reader.read_asl_file(entity_ident, object_id)
+        
+        if asl_content is None:
+            self.report({'ERROR'}, f"ASL file not found for entity {entity_ident:04d}")
+            return {'CANCELLED'}
+            
+        # Create a new text block in Blender with descriptive name
+        text_name = get_asl_text_name(entity_ident, object_id)
+        text_block = bpy.data.texts.get(text_name)
+        
+        if text_block:
+            # Update existing text block
+            text_block.clear()
+            text_block.write(asl_content)
+        else:
+            # Create new text block
+            text_block = bpy.data.texts.new(text_name)
+            text_block.write(asl_content)
+            
+        # Switch to text editor to show the ASL content
+        for area in context.screen.areas:
+            if area.type == 'TEXT_EDITOR':
+                area.spaces.active.text = text_block
+                break
+        else:
+            # If no text editor found, show info message
+            asl_path = asl_reader.get_asl_file_path(entity_ident, object_id)
+            self.report({'INFO'}, f"ASL file loaded in text block '{text_name}' from {asl_path}")
+            
+        return {'FINISHED'}
+
+class CUSTOM_OT_arx_show_asl_info(Operator):
+    bl_idname = "arx.show_asl_info"
+    bl_label = "Show ASL Info"
+    bl_description = "Show information about the ASL file for the selected entity"
+    
+    def execute(self, context):
+        obj = context.active_object
+        if not obj:
+            self.report({'ERROR'}, "No active object selected")
+            return {'CANCELLED'}
+            
+        # Check if object is an entity
+        if not obj.name.startswith('e:'):
+            self.report({'ERROR'}, "Selected object is not an entity")
+            return {'CANCELLED'}
+            
+        # Get entity identifier
+        entity_ident = obj.get("arx_entity_ident")
+        if entity_ident is None:
+            self.report({'ERROR'}, "Entity identifier not found")
+            return {'CANCELLED'}
+            
+        # Get data path from addon
+        addon = getAddon(context)
+        if not hasattr(addon, 'sceneManager') or not hasattr(addon.sceneManager, 'dataPath'):
+            self.report({'ERROR'}, "Arx data path not configured")
+            return {'CANCELLED'}
+            
+        # Get ASL file info
+        asl_reader = ASLReader(addon.sceneManager.dataPath)
+        asl_info = asl_reader.get_asl_file_info(entity_ident)
+        
+        if asl_info is None:
+            self.report({'ERROR'}, f"ASL file not found for entity {entity_ident:04d}")
+            return {'CANCELLED'}
+            
+        # Show info in a popup
+        def draw(self, context):
+            layout = self.layout
+            layout.label(text=f"ASL File Info for Entity {entity_ident:04d}")
+            layout.separator()
+            layout.label(text=f"Path: {asl_info['path']}")
+            layout.label(text=f"Size: {asl_info['size']} bytes")
+            layout.label(text=f"Modified: {asl_info['modified']}")
+            
+        bpy.context.window_manager.popup_menu(draw, title="ASL File Information", icon='INFO')
+        return {'FINISHED'}
+
+class CUSTOM_OT_arx_save_entity_asl(Operator):
+    bl_idname = "arx.save_entity_asl"
+    bl_label = "Save Entity ASL"
+    bl_description = "Save the current ASL text block back to the file"
+    
+    def execute(self, context):
+        # Try to get current text block from text editor context first
+        text_block = None
+        if context.space_data and hasattr(context.space_data, 'text'):
+            text_block = context.space_data.text
+        
+        # If we have a text block, parse entity info from its name
+        if text_block and text_block.name.startswith('ASL_'):
+            entity_ident, object_id = parse_asl_text_name(text_block.name)
+            if entity_ident is None:
+                self.report({'ERROR'}, f"Cannot parse entity info from text name: {text_block.name}")
+                return {'CANCELLED'}
+        else:
+            # Fallback to selected object method for backward compatibility
+            obj = context.active_object
+            if not obj or not obj.name.startswith('e:'):
+                self.report({'ERROR'}, "No ASL text open and no entity selected")
+                return {'CANCELLED'}
+                
+            entity_ident = obj.get("arx_entity_ident")
+            if entity_ident is None:
+                self.report({'ERROR'}, "Entity identifier not found")
+                return {'CANCELLED'}
+            
+            object_id = obj.get("arx_object_id")
+                
+            # Get the text block
+            text_name = get_asl_text_name(entity_ident, object_id)
+            text_block = bpy.data.texts.get(text_name)
+            if not text_block:
+                self.report({'ERROR'}, f"No ASL text block found: {text_name}")
+                return {'CANCELLED'}
+            
+        # Get data path from addon
+        addon = getAddon(context)
+        if not hasattr(addon, 'sceneManager') or not hasattr(addon.sceneManager, 'dataPath'):
+            self.report({'ERROR'}, "Arx data path not configured")
+            return {'CANCELLED'}
+            
+        # Find the ASL file path using the same method as the reader
+        asl_reader = ASLReader(addon.sceneManager.dataPath)
+        asl_path = asl_reader.get_asl_file_path(entity_ident, object_id)
+        
+        if not asl_path:
+            self.report({'ERROR'}, f"ASL file not found for entity {entity_ident:04d}")
+            return {'CANCELLED'}
+            
+        try:
+            # Get text content from Blender text block
+            content = text_block.as_string()
+            
+            # Write to file with ISO-8859-15 encoding
+            with open(asl_path, 'w', encoding='iso-8859-15') as f:
+                f.write(content)
+                
+            self.report({'INFO'}, f"ASL file saved: {asl_path}")
+            return {'FINISHED'}
+            
+        except Exception as e:
+            self.report({'ERROR'}, f"Error saving ASL file: {e}")
+            return {'CANCELLED'}
+
+class CUSTOM_OT_arx_reload_entity_asl(Operator):
+    bl_idname = "arx.reload_entity_asl"
+    bl_label = "Reload Entity ASL"
+    bl_description = "Reload the ASL file from disk, discarding any changes in the text editor"
+    
+    def execute(self, context):
+        obj = context.active_object
+        if not obj or not obj.name.startswith('e:'):
+            self.report({'ERROR'}, "No entity selected")
+            return {'CANCELLED'}
+            
+        entity_ident = obj.get("arx_entity_ident")
+        if entity_ident is None:
+            self.report({'ERROR'}, "Entity identifier not found")
+            return {'CANCELLED'}
+        
+        object_id = obj.get("arx_object_id")
+            
+        # Get data path from addon
+        addon = getAddon(context)
+        if not hasattr(addon, 'sceneManager') or not hasattr(addon.sceneManager, 'dataPath'):
+            self.report({'ERROR'}, "Arx data path not configured")
+            return {'CANCELLED'}
+            
+        # Read ASL file
+        asl_reader = ASLReader(addon.sceneManager.dataPath)
+        asl_content = asl_reader.read_asl_file(entity_ident, object_id)
+        
+        if asl_content is None:
+            self.report({'ERROR'}, f"ASL file not found for entity {entity_ident:04d}")
+            return {'CANCELLED'}
+            
+        # Update the text block
+        text_name = get_asl_text_name(entity_ident, object_id)
+        text_block = bpy.data.texts.get(text_name)
+        
+        if text_block:
+            text_block.clear()
+            text_block.write(asl_content)
+            self.report({'INFO'}, f"ASL file reloaded: {text_name}")
+        else:
+            # Create new text block if it doesn't exist
+            text_block = bpy.data.texts.new(text_name)
+            text_block.write(asl_content)
+            self.report({'INFO'}, f"ASL file loaded in new text block: {text_name}")
+            
+        return {'FINISHED'}
+
+def draw_asl_header_buttons(self, context):
+    """Draw function to append to text editor header"""
+    if context.space_data and hasattr(context.space_data, 'text'):
+        text = context.space_data.text
+        
+        if text and text.name.startswith('ASL_'):
+            layout = self.layout
+            
+            # Extract entity info from text name
+            try:
+                name_parts = text.name.split('_')
+                if len(name_parts) >= 2:
+                    entity_info = '_'.join(name_parts[1:])
+                    
+                    row = layout.row()
+                    row.separator()
+                    row.operator("arx.save_entity_asl", text="Save ASL", icon='FILE_TICK')
+                    row.operator("arx.reload_entity_asl", text="Reload", icon='FILE_REFRESH')
+                    row.separator()
+                    row.operator("arx.enable_asl_navigation", text="Navigation", icon='OUTLINER_OB_LIGHTPROBE')
+                    row.operator("arx.format_asl", text="Analyze", icon='VIEWZOOM')
+                    row.separator()
+                    row.label(text=f"ASL: {entity_info}")
+                    
+            except (ValueError, IndexError):
+                pass
+
+class CUSTOM_OT_arx_enable_asl_navigation(Operator):
+    bl_idname = "arx.enable_asl_navigation"
+    bl_label = "Enable ASL Navigation"
+    bl_description = "Enable ctrl+click navigation and syntax highlighting for ASL files"
+    
+    def execute(self, context):
+        # Store the navigator in global variable
+        global g_asl_navigator
+        if g_asl_navigator is None:
+            addon = getAddon(context)
+            g_asl_navigator = ASLNavigator(addon)
+        
+        # Enable the modal operator for handling clicks
+        bpy.ops.arx.asl_navigation_modal('INVOKE_DEFAULT')
+        
+        self.report({'INFO'}, "ASL navigation enabled - use Ctrl+Click to follow references")
+        return {'FINISHED'}
+
+class CUSTOM_OT_arx_asl_navigation_modal(Operator):
+    bl_idname = "arx.asl_navigation_modal"
+    bl_label = "ASL Navigation Modal"
+    bl_description = "Modal operator for handling ASL navigation"
+    
+    def modal(self, context, event):
+        # Only handle events in text editor
+        if context.area and context.area.type == 'TEXT_EDITOR':
+            space = context.space_data
+            text = space.text
+            
+            # Only handle ASL files
+            if text and text.name.startswith('ASL_'):
+                if event.type == 'LEFTMOUSE' and event.value == 'PRESS' and event.ctrl:
+                    # Get cursor position
+                    cursor_line = text.current_line_index
+                    cursor_char = text.current_character
+                    
+                    # Get or create the navigator
+                    navigator = getattr(context.window_manager, 'arx_asl_navigator', None)
+                    if not navigator:
+                        addon = getAddon(context)
+                        navigator = ASLNavigator(addon)
+                        context.window_manager.arx_asl_navigator = navigator
+                    
+                    # Parse the current line for references
+                    line_text = text.lines[cursor_line].body
+                    references = navigator.syntax_highlighter.find_references('\n'.join([line.body for line in text.lines]))
+                    
+                    # Find reference at cursor position
+                    for ref in references:
+                        if ref['line'] == cursor_line and ref['start'] <= cursor_char <= ref['end']:
+                            if navigator.navigate_to_reference(context, ref):
+                                return {'RUNNING_MODAL'}
+                            else:
+                                self.report({'WARNING'}, f"Could not navigate to {ref['type']}: {ref['name']}")
+                            break
+        
+        # Continue running
+        if event.type == 'ESC':
+            return {'CANCELLED'}
+        
+        return {'PASS_THROUGH'}
+    
+    def invoke(self, context, event):
+        context.window_manager.modal_handler_add(self)
+        return {'RUNNING_MODAL'}
+
+class CUSTOM_OT_arx_format_asl(Operator):
+    bl_idname = "arx.format_asl"
+    bl_label = "Format ASL Code"
+    bl_description = "Format and analyze ASL code for syntax errors"
+    
+    def execute(self, context):
+        if context.area.type != 'TEXT_EDITOR':
+            self.report({'ERROR'}, "Must be in text editor")
+            return {'CANCELLED'}
+            
+        text = context.space_data.text
+        if not text or not text.name.startswith('ASL_'):
+            self.report({'ERROR'}, "Not an ASL file")
+            return {'CANCELLED'}
+            
+        # Get or create the navigator for syntax analysis
+        global g_asl_navigator
+        if g_asl_navigator is None:
+            addon = getAddon(context)
+            g_asl_navigator = ASLNavigator(addon)
+        navigator = g_asl_navigator
+        
+        # Find all references in the text
+        content = text.as_string()
+        references = navigator.syntax_highlighter.find_references(content)
+        
+        # Show analysis results
+        def draw(self, context):
+            layout = self.layout
+            layout.label(text=f"ASL Analysis Results:")
+            layout.separator()
+            layout.label(text=f"Found {len(references)} references:")
+            
+            for ref in references[:10]:  # Show first 10 references
+                row = layout.row()
+                row.label(text=f"Line {ref['line'] + 1}: {ref['type']} '{ref['name']}'")
+                
+            if len(references) > 10:
+                layout.label(text=f"... and {len(references) - 10} more")
+        
+        bpy.context.window_manager.popup_menu(draw, title="ASL Code Analysis", icon='INFO')
+        return {'FINISHED'}
+
+class ArxEntityPanel(Panel):
+    bl_idname = "SCENE_PT_arx_entity"
+    bl_label = "Arx Entity ASL"
+    bl_space_type = 'PROPERTIES'
+    bl_region_type = 'WINDOW'
+    bl_context = "object"
+    
+    @classmethod
+    def poll(cls, context):
+        obj = context.active_object
+        return obj and obj.name.startswith('e:') and obj.get("arx_entity_ident") is not None
+    
+    def draw(self, context):
+        layout = self.layout
+        obj = context.active_object
+        
+        entity_ident = obj.get("arx_entity_ident")
+        entity_name = obj.get("arx_entity_name", "Unknown")
+        object_id = obj.get("arx_object_id")
+        
+        layout.label(text=f"Entity: {entity_name}")
+        layout.label(text=f"ID: {entity_ident:04d}")
+        
+        col = layout.column()
+        col.operator("arx.open_entity_asl", text="Open ASL File", icon='TEXT')
+        col.operator("arx.show_asl_info", text="Show ASL Info", icon='INFO')
+        
+        # Check if there's an ASL text block for this entity
+        text_name = get_asl_text_name(entity_ident, object_id)
+        text_block = bpy.data.texts.get(text_name)
+        if text_block:
+            col.separator()
+            col.operator("arx.save_entity_asl", text="Save ASL File", icon='FILE_TICK')
+            col.operator("arx.reload_entity_asl", text="Reload from File", icon='FILE_REFRESH')
+
 classes = (
     CUSTOM_OT_arx_area_list_reload,
     ARX_area_properties,
@@ -2947,6 +3714,14 @@ classes = (
     ArxLightingPanel,
     CUSTOM_OT_arx_regenerate_lighting,
     CUSTOM_OT_arx_preview_lighting,
+    CUSTOM_OT_arx_open_entity_asl,
+    CUSTOM_OT_arx_show_asl_info,
+    CUSTOM_OT_arx_save_entity_asl,
+    CUSTOM_OT_arx_reload_entity_asl,
+    CUSTOM_OT_arx_enable_asl_navigation,
+    CUSTOM_OT_arx_asl_navigation_modal,
+    CUSTOM_OT_arx_format_asl,
+    ArxEntityPanel,
 )
 
 def arx_ui_area_register():
@@ -2958,9 +3733,20 @@ def arx_ui_area_register():
     bpy.types.Scene.arx_animation_test = PointerProperty(type=ArxAnimationTestProperties)
     bpy.types.Scene.arx_model_list_props = PointerProperty(type=ArxModelListProperties)
     bpy.types.Scene.arx_lighting = PointerProperty(type=ARX_lighting_properties)
+    
+    # Register text editor header extension
+    bpy.types.TEXT_HT_header.append(draw_asl_header_buttons)
 
 def arx_ui_area_unregister():
     from bpy.utils import unregister_class
+    
+    # Clean up global ASL navigator
+    global g_asl_navigator
+    g_asl_navigator = None
+    
+    # Unregister text editor header extension
+    bpy.types.TEXT_HT_header.remove(draw_asl_header_buttons)
+    
     for cls in reversed(classes):
         unregister_class(cls)
     del bpy.types.WindowManager.arx_areas_col

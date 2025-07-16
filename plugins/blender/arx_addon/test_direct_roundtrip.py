@@ -27,7 +27,7 @@ def test_direct_roundtrip():
     serializer = FtsSerializer(ioLib)
     
     # Read original file
-    original_path = "/home/burner/Desktop/ArxLibertatis/build/game/graph/levels/level1/fast.fts"
+    original_path = "/home/burner/Desktop/ArxLibertatis/Level one backup do not fucking touch/fast.fts"
     test_path = "/tmp/test_direct_roundtrip.fts"
     
     print(f"Reading original: {original_path}")
