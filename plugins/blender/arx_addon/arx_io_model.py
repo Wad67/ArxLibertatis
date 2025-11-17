@@ -249,7 +249,8 @@ class ArxObjectManager(object):
 
     def loadFile(self, context, filePath, scene, import_tweaks: bool) -> bpy.types.Object:
         ftlData = self.loadFile_data(filePath)
-        objPath = os.path.join(self.dataPath, "game/graph/obj3d/interactive")
+        # Use os.path.join for cross-platform compatibility
+        objPath = os.path.join(self.dataPath, "game", "graph", "obj3d", "interactive")
         relPath = os.path.relpath(filePath, objPath)
         split = splitPath(relPath)
         canonicalId = split[:-1]

@@ -41,7 +41,8 @@ EntityData = namedtuple("EntityData", ["path", "script", "icon", "instances"])
 
 class Entities:
     def __init__(self):
-        self.paths = ["graph/obj3d/interactive"]
+        # Use os.path.join for cross-platform compatibility
+        self.paths = [os.path.join("graph", "obj3d", "interactive")]
         self.danglingPaths = []
         self.data = {}
 
@@ -121,7 +122,8 @@ ModelData = namedtuple("ModelData", ["path", "model", "tweaks"])
 
 class Models:
     def __init__(self):
-        self.paths = ["game/graph/obj3d/interactive"]
+        # Use os.path.join for cross-platform compatibility
+        self.paths = [os.path.join("game", "graph", "obj3d", "interactive")]
         self.danglingPaths = []
         self.data = {}
 
@@ -211,7 +213,11 @@ class LevelInfos(object):
 
 class Levels:
     def __init__(self):
-        self.paths = ["graph/levels", "game/graph/levels"]
+        # Use os.path.join for cross-platform compatibility
+        self.paths = [
+            os.path.join("graph", "levels"),
+            os.path.join("game", "graph", "levels")
+        ]
         self.danglingPaths = []
         self.levels = OrderedDict()
 
@@ -261,7 +267,8 @@ class Levels:
 
 class Cinematics:
     def __init__(self):
-        self.paths = ["graph/interface"] # TODO why not "graph/interface/illustrations"
+        # Use os.path.join for cross-platform compatibility
+        self.paths = [os.path.join("graph", "interface")] # TODO why not "graph/interface/illustrations"
         self.danglingPaths = []
         self.cins = []
         self.textures = {}
@@ -292,7 +299,12 @@ class Cinematics:
 
 class Textures:
     def __init__(self):
-        self.paths = ["graph/particles", "graph/interface", "graph/obj3d/textures"]
+        # Use os.path.join for cross-platform compatibility
+        self.paths = [
+            os.path.join("graph", "particles"),
+            os.path.join("graph", "interface"),
+            os.path.join("graph", "obj3d", "textures")
+        ]
         self.danglingPaths = []
         self.textures = []
 
@@ -302,7 +314,8 @@ class Textures:
 
 class Animations:
     def __init__(self):
-        self.paths = ["graph/obj3d/anims"]
+        # Use os.path.join for cross-platform compatibility
+        self.paths = [os.path.join("graph", "obj3d", "anims")]
         self.danglingPaths = []
         self.amins = []
         self.data = {}
@@ -393,11 +406,24 @@ class ArxFiles(object):
             relRoot = os.path.relpath(root, self.rootPath)
 
             for h in self.handlers:
-                if relRoot in h.paths:
-                    h.update(root)
-                    dirs.clear()
-                    files.clear()
-                    continue
+                # Fix for Windows: normalize paths before comparison
+                # On Windows, paths may have different separators
+                normalized_relRoot = os.path.normpath(relRoot)
+                for handler_path in h.paths:
+                    normalized_handler_path = os.path.normpath(handler_path)
+                    # Case-insensitive comparison on Windows
+                    if os.name == 'nt':
+                        if normalized_relRoot.lower() == normalized_handler_path.lower():
+                            h.update(root)
+                            dirs.clear()
+                            files.clear()
+                            break
+                    else:
+                        if normalized_relRoot == normalized_handler_path:
+                            h.update(root)
+                            dirs.clear()
+                            files.clear()
+                            break
 
             for f in files:
                 self.danglingPaths.append(os.path.join(root, f))
